@@ -14,35 +14,41 @@ pub struct CobolFileEntry {
 }
 
 /// Recursively scans `dir` for COBOL source and copybook files, ignoring common directories.
+/// The root directory is always scanned; exclusion rules only apply to subdirectories.
 pub fn scan_sandbox(dir: &Path) -> std::io::Result<Vec<CobolFileEntry>> {
     let mut files = Vec::new();
-    scan_dir_recursive(dir, &mut files)?;
+    scan_dir_entries(dir, &mut files)?;
     files.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(files)
 }
 
-fn scan_dir_recursive(dir: &Path, files: &mut Vec<CobolFileEntry>) -> std::io::Result<()> {
+/// Returns true if a directory name should be excluded from scanning.
+fn should_exclude_dir(name: &str) -> bool {
+    name.starts_with('.')
+        || name == "target"
+        || name == "node_modules"
+        || name == "vendor"
+        || name == "build"
+}
+
+/// Scans entries within `dir`. Does NOT check exclusion on `dir` itself —
+/// callers are responsible for filtering before recursing.
+fn scan_dir_entries(dir: &Path, files: &mut Vec<CobolFileEntry>) -> std::io::Result<()> {
     if !dir.is_dir() {
         return Ok(());
-    }
-
-    if let Some(name) = dir.file_name().and_then(|s| s.to_str()) {
-        // Skip common hidden/build/cache directories
-        if name.starts_with('.') 
-            || name == "target" 
-            || name == "node_modules" 
-            || name == "vendor" 
-            || name == "build"
-        {
-            return Ok(());
-        }
     }
 
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
         if path.is_dir() {
-            scan_dir_recursive(&path, files)?;
+            // Apply exclusion only to child directories, not the root
+            if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+                if should_exclude_dir(name) {
+                    continue;
+                }
+            }
+            scan_dir_entries(&path, files)?;
         } else if path.is_file() {
             if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
                 let ext_lower = ext.to_lowercase();
