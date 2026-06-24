@@ -117,6 +117,7 @@ impl App {
             glm_completion_tokens: 0,
             sandbox_active_option: 0,
             sandbox_path: None,
+            discovered_files: Vec::new(),
         }
     }
 
@@ -205,38 +206,51 @@ impl App {
                         if let Some(ref path) = self.sandbox_path {
                             self.messages.push(Message {
                                 sender: Sender::Cobolx,
-                                text: format!("Scanning sandbox directory: {}", path.to_string_lossy()),
+                                text: format!("Scanning sandbox directory (recursive): {}", path.to_string_lossy()),
                                 timestamp: Local::now().format("%H:%M:%S").to_string(),
                             });
 
-                            match std::fs::read_dir(path) {
+                            match crate::cobol::scanner::scan_sandbox(path) {
                                 Ok(entries) => {
-                                    let mut files = Vec::new();
-                                    for entry in entries.flatten() {
-                                        let p = entry.path();
-                                        if p.is_file() {
-                                            if let Some(ext) = p.extension().and_then(|s| s.to_str()) {
-                                                let ext_lower = ext.to_lowercase();
-                                                if ["cbl", "cob", "cpy", "coo"].contains(&ext_lower.as_str()) {
-                                                    if let Some(name) = p.file_name().and_then(|s| s.to_str()) {
-                                                        files.push(name.to_string());
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    files.sort();
-                                    if files.is_empty() {
+                                    self.discovered_files = entries;
+                                    if self.discovered_files.is_empty() {
                                         self.messages.push(Message {
                                             sender: Sender::Cobolx,
-                                            text: "No COBOL files found in the sandbox (supported: .cbl, .cob, .cpy, .coo).".to_string(),
+                                            text: "No COBOL files found in the sandbox (supported: .cbl, .cob, .cpy, .coo).\nSkips: .git, target, node_modules, vendor, build, hidden dirs.".to_string(),
                                             timestamp: Local::now().format("%H:%M:%S").to_string(),
                                         });
                                     } else {
-                                        let file_list = files.join("\n- ");
+                                        use crate::cobol::scanner::CobolFileType;
+                                        let sources: Vec<_> = self.discovered_files.iter()
+                                            .filter(|f| f.file_type == CobolFileType::Source)
+                                            .collect();
+                                        let copybooks: Vec<_> = self.discovered_files.iter()
+                                            .filter(|f| f.file_type == CobolFileType::Copybook)
+                                            .collect();
+
+                                        let mut report = format!(
+                                            "Found {} COBOL file(s): {} source(s), {} copybook(s)\n",
+                                            self.discovered_files.len(),
+                                            sources.len(),
+                                            copybooks.len(),
+                                        );
+
+                                        if !sources.is_empty() {
+                                            report.push_str("\n  Sources:");
+                                            for f in &sources {
+                                                report.push_str(&format!("\n    - {} ({} bytes)", f.path.to_string_lossy(), f.size_bytes));
+                                            }
+                                        }
+                                        if !copybooks.is_empty() {
+                                            report.push_str("\n  Copybooks:");
+                                            for f in &copybooks {
+                                                report.push_str(&format!("\n    - {} ({} bytes)", f.path.to_string_lossy(), f.size_bytes));
+                                            }
+                                        }
+
                                         self.messages.push(Message {
                                             sender: Sender::Cobolx,
-                                            text: format!("Found {} COBOL files in sandbox:\n- {}", files.len(), file_list),
+                                            text: report,
                                             timestamp: Local::now().format("%H:%M:%S").to_string(),
                                         });
                                     }
@@ -244,7 +258,7 @@ impl App {
                                 Err(e) => {
                                     self.messages.push(Message {
                                         sender: Sender::Cobolx,
-                                        text: format!("Failed to read sandbox directory: {}", e),
+                                        text: format!("Failed to scan sandbox directory: {}", e),
                                         timestamp: Local::now().format("%H:%M:%S").to_string(),
                                     });
                                 }
