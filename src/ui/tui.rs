@@ -34,6 +34,7 @@ pub enum RoutingMode {
 pub enum ViewMode {
     Chat,
     Config,
+    SandboxSelect,
 }
 
 pub enum TaskUpdate {
@@ -60,6 +61,9 @@ pub struct App {
     pub deepseek_completion_tokens: u32,
     pub glm_prompt_tokens: u32,
     pub glm_completion_tokens: u32,
+    pub sandbox_active_option: usize,
+    pub sandbox_path: Option<std::path::PathBuf>,
+    pub discovered_files: Vec<crate::cobol::scanner::CobolFileEntry>,
 }
 
 impl App {
@@ -77,7 +81,7 @@ impl App {
         let view_mode = if !has_keys {
             ViewMode::Config
         } else {
-            ViewMode::Chat
+            ViewMode::SandboxSelect
         };
 
         if !has_keys {
@@ -111,6 +115,8 @@ impl App {
             deepseek_completion_tokens: 0,
             glm_prompt_tokens: 0,
             glm_completion_tokens: 0,
+            sandbox_active_option: 0,
+            sandbox_path: None,
         }
     }
 
@@ -122,6 +128,7 @@ impl App {
             "/model".to_string(),
             "/config".to_string(),
             "/tokens".to_string(),
+            "/init".to_string(),
             "/exit".to_string(),
         ];
         if !self.input_text.starts_with('/') {
@@ -186,12 +193,69 @@ impl App {
                                             /model heavy      - Force routing to Heavy Model (GLM-4-Pro)\n\
                                             /config           - Open the interactive API Key Configuration Screen\n\
                                             /tokens           - Show model routing and token consumption statistics\n\
+                                            /init             - Scan the sandbox directory for COBOL files\n\
                                             /exit             - Close the interactive console";
                         self.messages.push(Message {
                             sender: Sender::Cobolx,
                             text: help_message.to_string(),
                             timestamp: Local::now().format("%H:%M:%S").to_string(),
                         });
+                    }
+                    "init" => {
+                        if let Some(ref path) = self.sandbox_path {
+                            self.messages.push(Message {
+                                sender: Sender::Cobolx,
+                                text: format!("Scanning sandbox directory: {}", path.to_string_lossy()),
+                                timestamp: Local::now().format("%H:%M:%S").to_string(),
+                            });
+
+                            match std::fs::read_dir(path) {
+                                Ok(entries) => {
+                                    let mut files = Vec::new();
+                                    for entry in entries.flatten() {
+                                        let p = entry.path();
+                                        if p.is_file() {
+                                            if let Some(ext) = p.extension().and_then(|s| s.to_str()) {
+                                                let ext_lower = ext.to_lowercase();
+                                                if ["cbl", "cob", "cpy", "coo"].contains(&ext_lower.as_str()) {
+                                                    if let Some(name) = p.file_name().and_then(|s| s.to_str()) {
+                                                        files.push(name.to_string());
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    files.sort();
+                                    if files.is_empty() {
+                                        self.messages.push(Message {
+                                            sender: Sender::Cobolx,
+                                            text: "No COBOL files found in the sandbox (supported: .cbl, .cob, .cpy, .coo).".to_string(),
+                                            timestamp: Local::now().format("%H:%M:%S").to_string(),
+                                        });
+                                    } else {
+                                        let file_list = files.join("\n- ");
+                                        self.messages.push(Message {
+                                            sender: Sender::Cobolx,
+                                            text: format!("Found {} COBOL files in sandbox:\n- {}", files.len(), file_list),
+                                            timestamp: Local::now().format("%H:%M:%S").to_string(),
+                                        });
+                                    }
+                                }
+                                Err(e) => {
+                                    self.messages.push(Message {
+                                        sender: Sender::Cobolx,
+                                        text: format!("Failed to read sandbox directory: {}", e),
+                                        timestamp: Local::now().format("%H:%M:%S").to_string(),
+                                    });
+                                }
+                            }
+                        } else {
+                            self.messages.push(Message {
+                                sender: Sender::Cobolx,
+                                text: "Error: No sandbox path configured. Please restart or select a sandbox directory first.".to_string(),
+                                timestamp: Local::now().format("%H:%M:%S").to_string(),
+                            });
+                        }
                     }
                     "tokens" | "usage" => {
                         let model_str = self.last_model.clone().unwrap_or_else(|| "None (No queries sent yet)".to_string());
@@ -541,10 +605,10 @@ fn run_loop<B: ratatui::backend::Backend>(
                                     match crate::config::ConfigManager::save(&new_data) {
                                         Ok(_) => {
                                             app.router = Arc::new(AgentRouter::new());
-                                            app.view_mode = ViewMode::Chat;
+                                            app.view_mode = ViewMode::SandboxSelect;
                                             app.messages.push(Message {
                                                 sender: Sender::Cobolx,
-                                                text: "Configuration successfully saved and reloaded! You can start chatting now.".to_string(),
+                                                text: "Configuration successfully saved and reloaded!".to_string(),
                                                 timestamp: Local::now().format("%H:%M:%S").to_string(),
                                             });
                                         }
@@ -583,6 +647,35 @@ fn run_loop<B: ratatui::backend::Backend>(
                                 app.config_deepseek_input.pop();
                             } else if app.config_active_field == 1 {
                                 app.config_glm_input.pop();
+                            }
+                        }
+                        _ => {}
+                    }
+                } else if app.view_mode == ViewMode::SandboxSelect {
+                    match key.code {
+                        KeyCode::Tab | KeyCode::Down | KeyCode::Up => {
+                            app.sandbox_active_option = 1 - app.sandbox_active_option;
+                        }
+                        KeyCode::Enter => {
+                            let resolved = if app.sandbox_active_option == 0 {
+                                std::env::current_dir().ok()
+                            } else {
+                                std::env::current_dir().ok().and_then(|p| p.parent().map(|parent| parent.to_path_buf()))
+                            };
+                            if let Some(path) = resolved {
+                                app.sandbox_path = Some(path.clone());
+                                app.view_mode = ViewMode::Chat;
+                                app.messages.push(Message {
+                                    sender: Sender::Cobolx,
+                                    text: format!("Sandbox directory set to: {}\nType /init to scan COBOL files in the sandbox.", path.to_string_lossy()),
+                                    timestamp: Local::now().format("%H:%M:%S").to_string(),
+                                });
+                            } else {
+                                app.messages.push(Message {
+                                    sender: Sender::Cobolx,
+                                    text: "Failed to resolve sandbox path. Please select current directory.".to_string(),
+                                    timestamp: Local::now().format("%H:%M:%S").to_string(),
+                                });
                             }
                         }
                         _ => {}

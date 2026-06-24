@@ -43,6 +43,76 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     );
     f.render_widget(header_block, chunks[0]);
 
+    if app.view_mode == crate::ui::tui::ViewMode::SandboxSelect {
+        let current_dir = std::env::current_dir().unwrap_or_default();
+        let parent_dir = current_dir.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| current_dir.clone());
+        
+        let current_border_color = if app.sandbox_active_option == 0 { Color::Green } else { Color::DarkGray };
+        let parent_border_color = if app.sandbox_active_option == 1 { Color::Green } else { Color::DarkGray };
+
+        let current_style = if app.sandbox_active_option == 0 {
+            Style::default().fg(Color::LightGreen)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+        let parent_style = if app.sandbox_active_option == 1 {
+            Style::default().fg(Color::LightGreen)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+
+        let sandbox_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(
+                [
+                    Constraint::Length(2), // Empty space
+                    Constraint::Length(4), // Option 1
+                    Constraint::Length(1), // Spacer
+                    Constraint::Length(4), // Option 2
+                    Constraint::Min(1),
+                ]
+                .as_ref(),
+            )
+            .split(chunks[1]);
+
+        let opt1_text = format!(" [1] Current Directory (.)\n     Path: {}", current_dir.to_string_lossy());
+        let opt1_widget = Paragraph::new(opt1_text)
+            .style(current_style)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Option A ")
+                    .border_style(Style::default().fg(current_border_color)),
+            );
+        f.render_widget(opt1_widget, sandbox_chunks[1]);
+
+        let opt2_text = format!(" [2] Parent Directory (..)\n     Path: {}", parent_dir.to_string_lossy());
+        let opt2_widget = Paragraph::new(opt2_text)
+            .style(parent_style)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Option B ")
+                    .border_style(Style::default().fg(parent_border_color)),
+            );
+        f.render_widget(opt2_widget, sandbox_chunks[3]);
+
+        // Draw instructions
+        let sandbox_help = " Tab / Up / Down: Toggle Sandbox Directory | Enter: Confirm Selection | Ctrl+C: Force Exit ";
+        let sandbox_help_block = Paragraph::new(sandbox_help).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Sandbox Selector Instructions ")
+                .border_style(Style::default().fg(Color::DarkGray)),
+        );
+        f.render_widget(sandbox_help_block, chunks[2]);
+
+        let empty_block = Paragraph::new("").block(Block::default().borders(Borders::NONE));
+        f.render_widget(empty_block, chunks[3]);
+
+        return;
+    }
+
     if app.view_mode == crate::ui::tui::ViewMode::Config {
         let ds_border_color = if app.config_active_field == 0 { Color::Green } else { Color::DarkGray };
         let glm_border_color = if app.config_active_field == 1 { Color::Green } else { Color::DarkGray };
@@ -267,6 +337,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                     "/clear" => " Clear console history",
                     "/about" => " About COBOLX",
                     "/model" => " Model routing override",
+                    "/config" => " Open API configuration",
+                    "/tokens" => " Show token consumption statistics",
+                    "/init" => "   Scan sandbox directory for COBOL",
                     "/exit" => "  Exit TUI",
                     _ => "",
                 };
