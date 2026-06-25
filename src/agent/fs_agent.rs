@@ -31,8 +31,8 @@ impl AgentRouter {
 
         let clean_canon = |p: &Path| -> String {
             let s = p.to_string_lossy().into_owned();
-            let s_stripped = if s.starts_with(r"\\?\") {
-                s[4..].to_string()
+            let s_stripped = if let Some(stripped) = s.strip_prefix(r"\\?\") {
+                stripped.to_string()
             } else {
                 s
             };

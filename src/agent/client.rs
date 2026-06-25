@@ -1,5 +1,5 @@
 use super::clients::{DeepSeekClient, GlmClient};
-use super::types::{ChatRequest, StreamOptions};
+
 // Re-exports — tui.rs and other in-crate code uses `use crate::agent::client::{...}`
 pub use super::types::{ChatMessage, Route, Usage};
 use crate::config::ConfigManager;
