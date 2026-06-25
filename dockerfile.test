@@ -13,10 +13,12 @@ WORKDIR /app
 
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
+COPY tests ./tests
 
 ENV CARGO_TARGET_DIR=/app/target \
     RUST_BACKTRACE=1
 
+RUN cargo test --locked --release
 RUN cargo build --locked --release
 
 FROM debian:bookworm-slim AS runtime

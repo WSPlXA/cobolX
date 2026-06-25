@@ -1,11 +1,43 @@
 use crate::ui::tui::Message;
 use crate::config::ConfigManager;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ChatMessage {
     pub role: String,
-    pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCall>>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ToolCall {
+    pub id: String,
+    pub r#type: String,
+    pub function: FunctionCall,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct FunctionCall {
+    pub name: String,
+    pub arguments: String,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct Tool {
+    pub r#type: String,
+    pub function: FunctionDefinition,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct FunctionDefinition {
+    pub name: String,
+    pub description: String,
+    pub parameters: serde_json::Value,
 }
 
 #[derive(Serialize)]
@@ -22,11 +54,16 @@ struct ChatRequest {
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stream_options: Option<StreamOptions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<Tool>>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct ChatResponseChoiceMessage {
-    content: String,
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    tool_calls: Option<Vec<ToolCall>>,
 }
 
 #[derive(Deserialize)]
@@ -34,10 +71,26 @@ struct ChatResponseChoice {
     message: ChatResponseChoiceMessage,
 }
 
+#[derive(Deserialize, Debug, Clone)]
+struct ToolCallDelta {
+    index: usize,
+    id: Option<String>,
+    r#type: Option<String>,
+    function: Option<FunctionCallDelta>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+struct FunctionCallDelta {
+    name: Option<String>,
+    arguments: Option<String>,
+}
+
 #[derive(Deserialize)]
 struct ChatResponseStreamChoiceDelta {
     #[serde(default)]
     content: Option<String>,
+    #[serde(default)]
+    tool_calls: Option<Vec<ToolCallDelta>>,
 }
 
 #[derive(Deserialize)]
@@ -91,6 +144,7 @@ impl DeepSeekClient {
             stream: false,
             temperature,
             stream_options: None,
+            tools: None,
         };
 
         let response = self
@@ -113,7 +167,7 @@ impl DeepSeekClient {
             .map_err(|e| format!("Failed to parse JSON: {}", e))?;
 
         if let Some(choice) = result.choices.first() {
-            Ok(choice.message.content.clone())
+            Ok(choice.message.content.clone().unwrap_or_default())
         } else {
             Err("No completion choices returned".to_string())
         }
@@ -131,6 +185,7 @@ impl DeepSeekClient {
             stream: true,
             temperature,
             stream_options: Some(StreamOptions { include_usage: true }),
+            tools: None,
         };
 
         let response = self
@@ -208,6 +263,7 @@ impl GlmClient {
             stream: false,
             temperature,
             stream_options: None,
+            tools: None,
         };
 
         let response = self
@@ -230,7 +286,7 @@ impl GlmClient {
             .map_err(|e| format!("Failed to parse JSON: {}", e))?;
 
         if let Some(choice) = result.choices.first() {
-            Ok(choice.message.content.clone())
+            Ok(choice.message.content.clone().unwrap_or_default())
         } else {
             Err("No completion choices returned".to_string())
         }
@@ -248,6 +304,7 @@ impl GlmClient {
             stream: true,
             temperature,
             stream_options: Some(StreamOptions { include_usage: true }),
+            tools: None,
         };
 
         let response = self
@@ -305,6 +362,37 @@ impl GlmClient {
     }
 }
 
+fn merge_tool_call_deltas(existing: &mut Vec<ToolCall>, deltas: Vec<ToolCallDelta>) {
+    for delta in deltas {
+        let idx = delta.index;
+        while existing.len() <= idx {
+            existing.push(ToolCall {
+                id: String::new(),
+                r#type: "function".to_string(),
+                function: FunctionCall {
+                    name: String::new(),
+                    arguments: String::new(),
+                },
+            });
+        }
+        let tc = &mut existing[idx];
+        if let Some(id) = delta.id {
+            tc.id.push_str(&id);
+        }
+        if let Some(r#type) = delta.r#type {
+            tc.r#type = r#type;
+        }
+        if let Some(func) = delta.function {
+            if let Some(name) = func.name {
+                tc.function.name.push_str(&name);
+            }
+            if let Some(args) = func.arguments {
+                tc.function.arguments.push_str(&args);
+            }
+        }
+    }
+}
+
 pub struct AgentRouter {
     deepseek: Option<DeepSeekClient>,
     glm: Option<GlmClient>,
@@ -350,14 +438,19 @@ impl AgentRouter {
         // Router system instructions
         let system_msg = ChatMessage {
             role: "system".to_string(),
-            content: "You are the Routing Sub-Agent. Your task is to analyze the user's query and classify it into one of two categories:\n\
-                      - 'LIGHT': simple greetings, basic questions, short chat, definitions.\n\
-                      - 'HEAVY': programming/coding questions, algorithm writing, complex logic, mathematics, system architecture, deep analysis.\n\
-                      You MUST output exactly one word, either 'LIGHT' or 'HEAVY'. Do not include any punctuation or extra text.".to_string(),
+            content: Some("You are the Routing Sub-Agent. Your task is to analyze the user's query and classify it into one of three categories:\n\
+                          - 'LIGHT': simple greetings, basic questions, short chat, definitions.\n\
+                          - 'HEAVY': programming/coding questions, algorithm writing, complex logic, mathematics, system architecture, deep analysis.\n\
+                          - 'DATABASE': questions asking about the COBOL project structure, files, copybook references, call graphs, or data variables/layout inside the workspace database.\n\
+                          You MUST output exactly one word, either 'LIGHT', 'HEAVY', or 'DATABASE'. Do not include any punctuation or extra text.".to_string()),
+            tool_call_id: None,
+            tool_calls: None,
         };
         let user_msg = ChatMessage {
             role: "user".to_string(),
-            content: prompt.to_string(),
+            content: Some(prompt.to_string()),
+            tool_call_id: None,
+            tool_calls: None,
         };
         let messages = vec![system_msg, user_msg];
 
@@ -373,7 +466,9 @@ impl AgentRouter {
         match response {
             Ok(content) => {
                 let trimmed = content.trim().to_uppercase();
-                if trimmed.contains("HEAVY") {
+                if trimmed.contains("DATABASE") {
+                    Route::Database
+                } else if trimmed.contains("HEAVY") {
                     Route::Heavy
                 } else {
                     Route::Light
@@ -385,13 +480,15 @@ impl AgentRouter {
 
     /// Dispatches prompt with dialog history memory to the selected sub-agent
     #[allow(dead_code)]
-    pub async fn execute_chat(&self, history: &[Message], route: Route) -> Result<(String, &'static str), String> {
+    pub async fn execute_chat(&self, history: &[Message], route: Route, sandbox_path: Option<&Path>) -> Result<(String, &'static str), String> {
         let mut messages = Vec::new();
         
         // System prompt defining COBOLX identity
         messages.push(ChatMessage {
             role: "system".to_string(),
-            content: "You are COBOLX, a helpful assistant. COBOLX is a migration agent for legacy COBOL systems based on DeepSeek.".to_string(),
+            content: Some("You are COBOLX, a helpful assistant. COBOLX is a migration agent for legacy COBOL systems based on DeepSeek.".to_string()),
+            tool_call_id: None,
+            tool_calls: None,
         });
 
         // Convert TUI local history into model messages (Memory)
@@ -416,7 +513,9 @@ impl AgentRouter {
             }
             messages.push(ChatMessage {
                 role,
-                content,
+                content: Some(content),
+                tool_call_id: None,
+                tool_calls: None,
             });
         }
 
@@ -443,6 +542,9 @@ impl AgentRouter {
                     Err("No API client initialized. Set DEEPSEEK_API_KEY or GLM_API_KEY.".to_string())
                 }
             }
+            Route::Database => {
+                Err("Database route is only supported in streaming mode.".to_string())
+            }
         }
     }
 
@@ -451,6 +553,7 @@ impl AgentRouter {
         &self,
         history: &[Message],
         route: Route,
+        sandbox_path: Option<&Path>,
         tx: tokio::sync::mpsc::UnboundedSender<String>,
     ) -> Result<(Option<Usage>, &'static str), String> {
         let mut messages = Vec::new();
@@ -458,7 +561,9 @@ impl AgentRouter {
         // System prompt defining COBOLX identity
         messages.push(ChatMessage {
             role: "system".to_string(),
-            content: "You are COBOLX, a helpful assistant. COBOLX is a migration agent for legacy COBOL systems based on DeepSeek.".to_string(),
+            content: Some("You are COBOLX, a helpful assistant. COBOLX is a migration agent for legacy COBOL systems based on DeepSeek.".to_string()),
+            tool_call_id: None,
+            tool_calls: None,
         });
 
         // Convert TUI local history into model messages (Memory)
@@ -483,7 +588,9 @@ impl AgentRouter {
             }
             messages.push(ChatMessage {
                 role,
-                content,
+                content: Some(content),
+                tool_call_id: None,
+                tool_calls: None,
             });
         }
 
@@ -510,7 +617,188 @@ impl AgentRouter {
                     Err("No API client initialized. Set DEEPSEEK_API_KEY or GLM_API_KEY.".to_string())
                 }
             }
+            Route::Database => {
+                let Some(path) = sandbox_path else {
+                    return Err("Database query requires a configured sandbox path.".to_string());
+                };
+                let model_name = if self.glm.is_some() {
+                    "GLM-4-Pro (Database Sub-Agent)"
+                } else {
+                    "DeepSeek (Database Sub-Agent)"
+                };
+                let res = self.run_database_agent_stream(&messages, path, tx).await;
+                res.map(|u| (u, model_name))
+            }
         }
+    }
+
+    async fn run_database_agent_stream(
+        &self,
+        initial_messages: &[ChatMessage],
+        sandbox_path: &Path,
+        tx: tokio::sync::mpsc::UnboundedSender<String>,
+    ) -> Result<Option<Usage>, String> {
+        let (api_key, api_url, model_name) = if let Some(ref g) = self.glm {
+            (g.api_key.clone(), "https://open.bigmodel.cn/api/paas/v4/chat/completions", "glm-4-pro")
+        } else if let Some(ref ds) = self.deepseek {
+            (ds.api_key.clone(), "https://api.deepseek.com/chat/completions", "deepseek-chat")
+        } else {
+            return Err("No API client initialized for Database Sub-Agent.".to_string());
+        };
+
+        let http_client = reqwest::Client::new();
+        let mut messages = initial_messages.to_vec();
+
+        // Update system message
+        if let Some(first_msg) = messages.get_mut(0) {
+            if first_msg.role == "system" {
+                first_msg.content = Some("You are the COBOLX Database Sub-Agent. Your task is to help the user analyze their COBOL codebase by querying the local SQLite database. You have access to the `query_sqlite` tool to execute read-only SELECT queries.\n\
+                Database Schema:\n\
+                1. `files` (id INTEGER PRIMARY KEY, path TEXT, kind TEXT ('source' or 'copybook'), size_bytes INTEGER, mtime_unix INTEGER)\n\
+                2. `programs` (id INTEGER PRIMARY KEY, name TEXT, file_id INTEGER, start_offset INTEGER, byte_len INTEGER) - COBOL programs.\n\
+                3. `copybook_uses` (id INTEGER PRIMARY KEY, from_file_id INTEGER, copybook_name TEXT, start_offset INTEGER, byte_len INTEGER, resolved_file_id INTEGER, resolve_status TEXT ('resolved', 'missing'), replacing_text TEXT) - COPY book tracking.\n\
+                4. `call_edges` (id INTEGER PRIMARY KEY, caller_program_id INTEGER, callee_name TEXT, start_offset INTEGER, byte_len INTEGER, kind TEXT ('static', 'dynamic'), using_count INTEGER) - CALL graphs.\n\
+                5. `data_items` (id INTEGER PRIMARY KEY, program_id INTEGER, source_file_id INTEGER, name TEXT, level INTEGER, parent_name TEXT, pic TEXT, usage_clause TEXT, occurs INTEGER, redefines TEXT, section TEXT, byte_offset INTEGER, byte_size INTEGER, storage_kind TEXT, layout_status TEXT, start_offset INTEGER, byte_len INTEGER) - variable details.\n\n\
+                GUIDELINES:\n\
+                - Write standard SELECT queries to run on SQLite.\n\
+                - Make sure the SQL is correct and only executes read-only SELECT statements.\n\
+                - If unsure what table columns are, perform queries to check them first.\n\
+                - Explain the answers clearly. If no data matches, explain that to the user.".to_string());
+            }
+        }
+
+        let query_sqlite_tool = Tool {
+            r#type: "function".to_string(),
+            function: FunctionDefinition {
+                name: "query_sqlite".to_string(),
+                description: "Run a read-only SELECT query against the local SQLite database indexing the COBOL project structure.".to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "sql": {
+                            "type": "string",
+                            "description": "The SQLite SELECT statement to execute."
+                        }
+                    },
+                    "required": ["sql"]
+                }),
+            },
+        };
+        let tools = vec![query_sqlite_tool];
+
+        let mut final_usage = Usage::default();
+
+        for _turn in 0..5 {
+            let request_body = ChatRequest {
+                model: model_name.to_string(),
+                messages: messages.clone(),
+                stream: true,
+                temperature: Some(0.0),
+                stream_options: Some(StreamOptions { include_usage: true }),
+                tools: Some(tools.clone()),
+            };
+
+            let response = http_client
+                .post(api_url)
+                .header("Authorization", format!("Bearer {}", api_key))
+                .json(&request_body)
+                .send()
+                .await
+                .map_err(|e| format!("Network error: {}", e))?;
+
+            if !response.status().is_success() {
+                let err_body = response.text().await.unwrap_or_default();
+                return Err(format!("Database Sub-Agent API error: {}", err_body));
+            }
+
+            use futures_util::StreamExt;
+            let mut stream = response.bytes_stream();
+            let mut buffer = String::new();
+            let mut tool_calls_accumulated: Vec<ToolCall> = Vec::new();
+
+            while let Some(chunk_res) = stream.next().await {
+                let chunk = chunk_res.map_err(|e| format!("Stream read error: {}", e))?;
+                let chunk_str = String::from_utf8_lossy(&chunk);
+                buffer.push_str(&chunk_str);
+
+                while let Some(pos) = buffer.find('\n') {
+                    let line = buffer[..pos].to_string();
+                    buffer.drain(..=pos);
+
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    if trimmed == "data: [DONE]" {
+                        break;
+                    }
+                    if let Some(json_str) = trimmed.strip_prefix("data: ") {
+                        if let Ok(parsed) = serde_json::from_str::<ChatResponseStream>(json_str) {
+                            if let Some(ref usage) = parsed.usage {
+                                final_usage.prompt_tokens += usage.prompt_tokens;
+                                final_usage.completion_tokens += usage.completion_tokens;
+                                final_usage.total_tokens += usage.total_tokens;
+                            }
+                            if let Some(choice) = parsed.choices.first() {
+                                if let Some(ref content) = choice.delta.content {
+                                    if !content.is_empty() {
+                                        let _ = tx.send(content.clone());
+                                    }
+                                }
+                                if let Some(ref deltas) = choice.delta.tool_calls {
+                                    merge_tool_call_deltas(&mut tool_calls_accumulated, deltas.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !tool_calls_accumulated.is_empty() {
+                let _ = tx.send("\n*(Database Sub-Agent: Querying SQLite database...)*\n".to_string());
+
+                let assistant_msg = ChatMessage {
+                    role: "assistant".to_string(),
+                    content: None,
+                    tool_call_id: None,
+                    tool_calls: Some(tool_calls_accumulated.clone()),
+                };
+                messages.push(assistant_msg);
+
+                let store = MemoryStore::open_or_create(sandbox_path)
+                    .map_err(|e| format!("Failed to open memory store: {}", e))?;
+
+                for tc in &tool_calls_accumulated {
+                    if tc.function.name == "query_sqlite" {
+                        let parsed_args: serde_json::Value = serde_json::from_str(&tc.function.arguments)
+                            .map_err(|e| format!("Failed to parse function arguments: {}", e))?;
+                        
+                        let sql = parsed_args.get("sql")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+
+                        let db_result = match store.query_readonly(sql) {
+                            Ok(json_val) => json_val.to_string(),
+                            Err(err) => serde_json::json!({
+                                "error": err.to_string()
+                            }).to_string(),
+                        };
+
+                        let tool_msg = ChatMessage {
+                            role: "tool".to_string(),
+                            content: Some(db_result),
+                            tool_call_id: Some(tc.id.clone()),
+                            tool_calls: None,
+                        };
+                        messages.push(tool_msg);
+                    }
+                }
+            } else {
+                break;
+            }
+        }
+
+        Ok(Some(final_usage))
     }
 }
 

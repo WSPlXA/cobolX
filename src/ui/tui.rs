@@ -57,6 +57,65 @@ pub struct App {
     pub last_model: Option<String>,
     pub last_prompt_tokens: u32,
     pub last_completion_tokens: u32,
+use crate::agent::client::AgentRouter;
+use crate::ui::draw;
+use chrono::Local;
+use crossterm::{
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
+use ratatui::{backend::CrosstermBackend, Terminal};
+use std::io;
+use std::sync::Arc;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sender {
+    User,
+    Cobolx,
+}
+
+#[derive(Debug, Clone)]
+pub struct Message {
+    pub sender: Sender,
+    pub text: String,
+    pub timestamp: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoutingMode {
+    Auto,
+    ForceLight,
+    ForceHeavy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewMode {
+    Chat,
+    Config,
+    SandboxSelect,
+}
+
+pub enum TaskUpdate {
+    Routed(crate::agent::client::Route, &'static str),
+    Delta(String, &'static str),
+    Finished(Result<Option<crate::agent::client::Usage>, String>, &'static str),
+}
+
+pub struct App {
+    pub messages: Vec<Message>,
+    pub input_text: String,
+    pub dropdown_index: usize,
+    pub show_dropdown: bool,
+    pub routing_mode: RoutingMode,
+    pub router: Arc<AgentRouter>,
+    pub view_mode: ViewMode,
+    pub config_active_field: usize,
+    pub config_deepseek_input: String,
+    pub config_glm_input: String,
+    pub last_model: Option<String>,
+    pub last_prompt_tokens: u32,
+    pub last_completion_tokens: u32,
     pub deepseek_prompt_tokens: u32,
     pub deepseek_completion_tokens: u32,
     pub glm_prompt_tokens: u32,
@@ -64,6 +123,7 @@ pub struct App {
     pub sandbox_active_option: usize,
     pub sandbox_path: Option<std::path::PathBuf>,
     pub discovered_files: Vec<crate::cobol::scanner::CobolFileEntry>,
+    pub active_agent: Option<String>,
 }
 
 impl App {
@@ -118,6 +178,7 @@ impl App {
             sandbox_active_option: 0,
             sandbox_path: None,
             discovered_files: Vec::new(),
+            active_agent: None,
         }
     }
 
@@ -231,300 +292,13 @@ impl App {
                                             timestamp: Local::now().format("%H:%M:%S").to_string(),
                                         });
                                     }
-                                }
-                                Err(e) => {
-                                    self.messages.push(Message {
-                                        sender: Sender::Cobolx,
-                                        text: format!("Failed to scan sandbox directory: {}", e),
-                                        timestamp: Local::now().format("%H:%M:%S").to_string(),
-                                    });
-                                }
-                            }
-                        } else {
-                            self.messages.push(Message {
-                                sender: Sender::Cobolx,
-                                text: "Error: No sandbox path configured. Please restart or select a sandbox directory first.".to_string(),
-                                timestamp: Local::now().format("%H:%M:%S").to_string(),
-                            });
-                        }
-                    }
-                    "tokens" | "usage" => {
-                        let model_str = self.last_model.clone().unwrap_or_else(|| "None (No queries sent yet)".to_string());
-                        let last_total = self.last_prompt_tokens + self.last_completion_tokens;
-                        let ds_total = self.deepseek_prompt_tokens + self.deepseek_completion_tokens;
-                        let glm_total = self.glm_prompt_tokens + self.glm_completion_tokens;
-                        let grand_total = ds_total + glm_total;
-                        
-                        let usage_message = format!(
-                            "Model Routing & Token Metrics:\n\
-                             ---------------------------------\n\
-                             Last Routed Model      : {}\n\
-                             Last Prompt Tokens     : {}\n\
-                             Last Completion Tokens : {}\n\
-                             Last Total Tokens      : {}\n\
-                             \n\
-                             Session Totals by Model:\n\
-                             ---------------------------------\n\
-                             [ DeepSeek ]\n\
-                             Prompt Tokens          : {}\n\
-                             Completion Tokens      : {}\n\
-                             Total DeepSeek Tokens  : {}\n\
-                             \n\
-                             [ GLM-4-Pro ]\n\
-                             Prompt Tokens          : {}\n\
-                             Completion Tokens      : {}\n\
-                             Total GLM-4-Pro Tokens : {}\n\
-                             \n\
-                             Grand Total Session    : {}",
-                            model_str,
-                            self.last_prompt_tokens,
-                            self.last_completion_tokens,
-                            last_total,
-                            self.deepseek_prompt_tokens,
-                            self.deepseek_completion_tokens,
-                            ds_total,
-                            self.glm_prompt_tokens,
-                            self.glm_completion_tokens,
-                            glm_total,
-                            grand_total
-                        );
-                        self.messages.push(Message {
-                            sender: Sender::Cobolx,
-                            text: usage_message,
-                            timestamp: Local::now().format("%H:%M:%S").to_string(),
-                        });
-                    }
-                    "config" | "settings" => {
-                        let (_, config_data) = crate::config::ConfigManager::load_or_create();
-                        self.config_deepseek_input = config_data.deepseek_api_key;
-                        self.config_glm_input = config_data.glm_api_key;
-                        self.config_active_field = 0;
-                        self.view_mode = ViewMode::Config;
-                        self.messages.push(Message {
-                            sender: Sender::Cobolx,
-                            text: "Opening configuration screen... Use Tab/arrows to navigate, type to enter keys, and select Save.".to_string(),
-                            timestamp: Local::now().format("%H:%M:%S").to_string(),
-                        });
-                    }
-                    "model" => {
-                        if parts.len() > 1 {
-                            let arg = parts[1].to_lowercase();
-                            match arg.as_str() {
-                                "auto" => {
-                                    self.routing_mode = RoutingMode::Auto;
-                                    self.messages.push(Message {
-                                        sender: Sender::Cobolx,
-                                        text: "Model routing set to Auto. Router Sub-Agent will classify tasks dynamically.".to_string(),
-                                        timestamp: Local::now().format("%H:%M:%S").to_string(),
-                                    });
-                                }
-                                "light" => {
-                                    self.routing_mode = RoutingMode::ForceLight;
-                                    self.messages.push(Message {
-                                        sender: Sender::Cobolx,
-                                        text: "Model routing set to ForceLight. All queries sent to DeepSeek (lightweight).".to_string(),
-                                        timestamp: Local::now().format("%H:%M:%S").to_string(),
-                                    });
-                                }
-                                "heavy" => {
-                                    self.routing_mode = RoutingMode::ForceHeavy;
-                                    self.messages.push(Message {
-                                        sender: Sender::Cobolx,
-                                        text: "Model routing set to ForceHeavy. All queries sent to GLM-4-Pro (heavy).".to_string(),
-                                        timestamp: Local::now().format("%H:%M:%S").to_string(),
-                                    });
-                                }
-                                _ => {
-                                    self.messages.push(Message {
-                                        sender: Sender::Cobolx,
-                                        text: format!("Invalid argument: '{}'. Choose from: auto, light, heavy.", parts[1]),
-                                        timestamp: Local::now().format("%H:%M:%S").to_string(),
-                                    });
-                                }
-                            }
-                        } else {
-                            let mode_str = match self.routing_mode {
-                                RoutingMode::Auto => "Auto (Automatic Sub-Agent routing)",
-                                RoutingMode::ForceLight => "ForceLight (Forced to DeepSeek)",
-                                RoutingMode::ForceHeavy => "ForceHeavy (Forced to GLM-4-Pro)",
-                            };
-                            self.messages.push(Message {
-                                sender: Sender::Cobolx,
-                                text: format!("Current routing mode: {}.", mode_str),
-                                timestamp: Local::now().format("%H:%M:%S").to_string(),
-                            });
-                        }
-                    }
-                    _ => {
-                        self.messages.push(Message {
-                            sender: Sender::Cobolx,
-                            text: format!("Unknown command: /{}. Type /help to see all available commands.", cmd),
-                            timestamp: Local::now().format("%H:%M:%S").to_string(),
-                        });
-                    }
-                }
-            }
-        }
-
-        self.input_text.clear();
-        self.show_dropdown = false;
-        (should_exit, is_command)
-    }
-}
-
-pub fn run_tui() -> Result<(), io::Error> {
-    // Setup terminal
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
-
-    // Create app state
-    let mut app = App::new();
-
-    // Create background task channel
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<TaskUpdate>();
-
-    let res = run_loop(&mut terminal, &mut app, &tx, &mut rx);
-
-    // Restore terminal
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
-    terminal.show_cursor()?;
-
-    if let Err(err) = res {
-        println!("{:?}", err);
-    }
-
-    Ok(())
-}
-
-fn trigger_chat_task(
-    app: &mut App,
-    tx: &tokio::sync::mpsc::UnboundedSender<TaskUpdate>,
-) -> bool {
-    let raw_text = app.input_text.trim().to_string();
-    if raw_text.is_empty() {
-        return false;
-    }
-
-    let (should_exit, is_command) = app.submit_message();
-    if should_exit {
-        return true;
-    }
-
-    // Spawn sub-agent requests if not a local command
-    if !is_command {
-        if !app.router.has_credentials() {
-            let error_text = if let Some(ref path) = app.router.config_path {
-                format!("Error: No API credentials found. Please configure your API keys in the config file at:\n  {}\nOr set DEEPSEEK_API_KEY or GLM_API_KEY environment variables.", path)
-            } else {
-                "Error: No API credentials found. Please set DEEPSEEK_API_KEY or GLM_API_KEY environment variables.".to_string()
-            };
-            app.messages.push(Message {
-                sender: Sender::Cobolx,
-                text: error_text,
-                timestamp: Local::now().format("%H:%M:%S").to_string(),
-            });
-            return false;
-        }
-
-        // Add the routing placeholder
-        app.messages.push(Message {
-            sender: Sender::Cobolx,
-            text: "Routing...".to_string(),
-            timestamp: Local::now().format("%H:%M:%S").to_string(),
-        });
-
-        let router = Arc::clone(&app.router);
-        let history = app.messages.clone();
-        let mode = app.routing_mode;
-        let tx_clone = tx.clone();
-
-        tokio::spawn(async move {
-            // Step 1: Sub-Agent Router Classification
-            let route = match mode {
-                RoutingMode::ForceLight => crate::agent::client::Route::Light,
-                RoutingMode::ForceHeavy => crate::agent::client::Route::Heavy,
-                RoutingMode::Auto => router.classify_route(&raw_text).await,
-            };
-
-            let route_name = match route {
-                crate::agent::client::Route::Light => "DeepSeek",
-                crate::agent::client::Route::Heavy => "GLM-4-Pro",
-            };
-
-            // Update TUI status via channel
-            let _ = tx_clone.send(TaskUpdate::Routed(route, route_name));
-
-            // Create streaming channel
-            let (stream_tx, mut stream_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-
-            // Spawn token forwarder
-            let tx_clone_delta = tx_clone.clone();
-            let route_name_static = match route {
-                crate::agent::client::Route::Light => "DeepSeek",
-                crate::agent::client::Route::Heavy => "GLM-4-Pro",
-            };
-            let forward_handle = tokio::spawn(async move {
-                while let Some(delta) = stream_rx.recv().await {
-                    let _ = tx_clone_delta.send(TaskUpdate::Delta(delta, route_name_static));
-                }
-            });
-
-            // Step 2: Execute actual dialog query with memory context
-            let result = router.execute_chat_stream(&history, route, stream_tx).await;
-
-            // Wait for forwarder to finish
-            let _ = forward_handle.await;
-
-            // Update TUI response via channel to mark as finished
-            match result {
-                Ok((usage, model_used)) => {
-                    let _ = tx_clone.send(TaskUpdate::Finished(Ok(usage), model_used));
-                }
-                Err(err) => {
-                    let _ = tx_clone.send(TaskUpdate::Finished(Err(err), "Error"));
-                }
-            }
-        });
-    }
-
-    false
-}
-
-fn run_loop<B: ratatui::backend::Backend>(
-    terminal: &mut Terminal<B>,
-    app: &mut App,
-    tx: &tokio::sync::mpsc::UnboundedSender<TaskUpdate>,
-    rx: &mut tokio::sync::mpsc::UnboundedReceiver<TaskUpdate>,
-) -> io::Result<()> {
-    loop {
-        // Drain incoming messages from background task
-        while let Ok(update) = rx.try_recv() {
-            match update {
-                TaskUpdate::Routed(_route, route_name) => {
-                    if let Some(msg) = app.messages.iter_mut().last() {
-                        if msg.text == "Routing..." {
-                            msg.text = format!("(Routed: {}) Thinking...", route_name);
-                        }
-                    }
-                }
-                TaskUpdate::Delta(delta, model_used) => {
-                    if let Some(msg) = app.messages.iter_mut().last() {
-                        if msg.text.contains("Thinking...") {
-                            msg.text = format!("(Using {}) {}", model_used, delta);
                         } else {
                             msg.text.push_str(&delta);
                         }
                     }
                 }
                 TaskUpdate::Finished(res, model_used) => {
+                    app.active_agent = None;
                     match res {
                         Ok(Some(usage)) => {
                             app.last_model = Some(model_used.to_string());

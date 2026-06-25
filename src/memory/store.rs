@@ -82,6 +82,57 @@ impl MemoryStore {
     pub fn connection_mut(&mut self) -> &mut Connection {
         &mut self.conn
     }
+
+    pub fn query_readonly(&self, sql: &str) -> StoreResult<serde_json::Value> {
+        let trimmed = sql.trim();
+        if !trimmed.to_ascii_uppercase().starts_with("SELECT") {
+            return Err("Only SELECT queries are allowed for security reasons".into());
+        }
+
+        let mut stmt = self.conn.prepare(trimmed)?;
+        let col_count = stmt.column_count();
+        let col_names: Vec<String> = stmt
+            .column_names()
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        let mut rows = stmt.query([])?;
+        let mut result_rows = Vec::new();
+
+        while let Some(row) = rows.next()? {
+            let mut map = serde_json::Map::new();
+            for i in 0..col_count {
+                let col_name = &col_names[i];
+                let value_ref = row.get_ref(i)?;
+                let value = match value_ref {
+                    rusqlite::types::ValueRef::Null => serde_json::Value::Null,
+                    rusqlite::types::ValueRef::Integer(v) => {
+                        serde_json::Value::Number(serde_json::Number::from(v))
+                    }
+                    rusqlite::types::ValueRef::Real(v) => {
+                        if let Some(num) = serde_json::Number::from_f64(v) {
+                            serde_json::Value::Number(num)
+                        } else {
+                            serde_json::Value::Null
+                        }
+                    }
+                    rusqlite::types::ValueRef::Text(v) => {
+                        let s = std::str::from_utf8(v).unwrap_or("");
+                        serde_json::Value::String(s.to_string())
+                    }
+                    rusqlite::types::ValueRef::Blob(v) => {
+                        let hex_str = v.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+                        serde_json::Value::String(hex_str)
+                    }
+                };
+                map.insert(col_name.clone(), value);
+            }
+            result_rows.push(serde_json::Value::Object(map));
+        }
+
+        Ok(serde_json::Value::Array(result_rows))
+    }
 }
 
 fn create_dirs(paths: &MemoryPaths) -> StoreResult<()> {
@@ -316,4 +367,30 @@ fn ensure_column(
     }
 
     conn.execute_batch(alter_sql)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_query_readonly_safety() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::open_or_create(temp_dir.path()).unwrap();
+
+        // 1. Valid read-only query
+        let res = store.query_readonly("SELECT * FROM files");
+        assert!(res.is_ok());
+        let val = res.unwrap();
+        assert!(val.is_array());
+
+        // 2. Reject modifying queries
+        let res_insert = store.query_readonly("INSERT INTO files (path, kind, size_bytes, mtime_unix) VALUES ('test.cob', 'source', 10, 0)");
+        assert!(res_insert.is_err());
+        assert!(res_insert.unwrap_err().to_string().contains("Only SELECT queries are allowed"));
+
+        let res_drop = store.query_readonly("DROP TABLE files");
+        assert!(res_drop.is_err());
+        assert!(res_drop.unwrap_err().to_string().contains("Only SELECT queries are allowed"));
+    }
 }

@@ -275,12 +275,18 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         0
     };
 
+    let console_title = match &app.active_agent {
+        Some(agent) => format!(" COBOLX Console [Active: {}] ", agent),
+        None => " COBOLX Console ".to_string(),
+    };
+    let border_color = if app.active_agent.is_some() { Color::Green } else { Color::DarkGray };
+
     let console_block = Paragraph::new(display_lines)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" COBOLX Console ")
-                .border_style(Style::default().fg(Color::DarkGray)),
+                .title(console_title)
+                .border_style(Style::default().fg(border_color)),
         )
         .wrap(ratatui::widgets::Wrap { trim: false })
         .scroll((scroll_y, 0));
