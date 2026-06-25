@@ -10,6 +10,7 @@ pub struct MemoryPaths {
     pub base_dir: PathBuf,
     pub db_path: PathBuf,
     pub blobs_dir: PathBuf,
+    pub docs_dir: PathBuf,
     pub runs_dir: PathBuf,
     pub skills_dir: PathBuf,
 }
@@ -24,6 +25,7 @@ impl MemoryPaths {
     pub fn for_root(root: impl Into<PathBuf>) -> Self {
         let root = root.into();
         let base_dir = root.join(".cobolx");
+        let docs_dir = root.join("docs");
         let memory_dir = base_dir.join("memory");
 
         Self {
@@ -31,6 +33,7 @@ impl MemoryPaths {
             base_dir: base_dir.clone(),
             db_path: memory_dir.join("project.db"),
             blobs_dir: base_dir.join("blobs"),
+            docs_dir,
             runs_dir: base_dir.join("runs"),
             skills_dir: base_dir.join("skills"),
         }
@@ -64,6 +67,14 @@ impl MemoryStore {
         &self.paths.db_path
     }
 
+    pub fn docs_dir(&self) -> &Path {
+        &self.paths.docs_dir
+    }
+
+    pub fn skills_dir(&self) -> &Path {
+        &self.paths.skills_dir
+    }
+
     pub fn connection(&self) -> &Connection {
         &self.conn
     }
@@ -76,6 +87,7 @@ impl MemoryStore {
 fn create_dirs(paths: &MemoryPaths) -> StoreResult<()> {
     std::fs::create_dir_all(paths.db_path.parent().unwrap())?;
     std::fs::create_dir_all(&paths.blobs_dir)?;
+    std::fs::create_dir_all(&paths.docs_dir)?;
     std::fs::create_dir_all(&paths.runs_dir)?;
     std::fs::create_dir_all(&paths.skills_dir)?;
     Ok(())

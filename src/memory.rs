@@ -1,3 +1,4 @@
+pub mod files;
 pub mod store;
 
 #[allow(unused_imports)]
