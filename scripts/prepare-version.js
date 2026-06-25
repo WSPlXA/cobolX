@@ -19,8 +19,14 @@ let npmTag = 'latest';
 if (githubRef.startsWith('refs/tags/v')) {
   version = githubRef.replace('refs/tags/v', '');
 } else {
-  const attemptSuffix = runAttempt !== '1' ? `.${runAttempt}` : '';
-  version = `${baseVersion}-canary.${runNumber}${attemptSuffix}`;
+  // Use UTC YYYYMMDDHHMM timestamp to ensure uniqueness and prevent registry publish collisions
+  const now = new Date();
+  const timestamp = now.getUTCFullYear().toString() +
+    String(now.getUTCMonth() + 1).padStart(2, '0') +
+    String(now.getUTCDate()).padStart(2, '0') +
+    String(now.getUTCHours()).padStart(2, '0') +
+    String(now.getUTCMinutes()).padStart(2, '0');
+  version = `${baseVersion}-canary.${runNumber}.${timestamp}`;
   isCanary = 'true';
   npmTag = 'canary';
 }

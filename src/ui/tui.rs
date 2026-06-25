@@ -640,7 +640,7 @@ fn trigger_chat_task(app: &mut App, tx: &tokio::sync::mpsc::UnboundedSender<Task
     // Add a placeholder message for the incoming streaming response
     app.messages.push(Message {
         sender: Sender::Cobolx,
-        text: "Thinking...".to_string(),
+        text: "思考中 / Thinking...".to_string(),
         timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
     });
 
@@ -723,8 +723,8 @@ pub fn run_tui() -> Result<(), io::Error> {
                         app.agent_status = Some(format!("Using {}", model_used));
                     }
                     if let Some(msg) = app.messages.iter_mut().last() {
-                        if msg.text == "Thinking..." {
-                            msg.text = format!("(Routed: {})\nThinking...", model_used);
+                        if msg.text == "Thinking..." || msg.text == "思考中 / Thinking..." {
+                            msg.text = format!("(Routed: {})\n思考中 / Thinking...", model_used);
                         }
                     }
                 }
@@ -733,8 +733,9 @@ pub fn run_tui() -> Result<(), io::Error> {
                     if let Some(msg) = app.messages.iter_mut().last() {
                         if let Some(reasoning) = delta.strip_prefix("\x01REASONING:") {
                             if msg.text == "Thinking..."
+                                || msg.text == "思考中 / Thinking..."
                                 || (msg.text.starts_with("(Routed:")
-                                    && msg.text.contains("Thinking..."))
+                                    && (msg.text.contains("Thinking...") || msg.text.contains("思考中")))
                             {
                                 msg.text = format!(
                                     "(Using {}) [Thinking Process]\n{}",
@@ -745,8 +746,9 @@ pub fn run_tui() -> Result<(), io::Error> {
                             }
                         } else {
                             if msg.text == "Thinking..."
+                                || msg.text == "思考中 / Thinking..."
                                 || (msg.text.starts_with("(Routed:")
-                                    && msg.text.contains("Thinking..."))
+                                    && (msg.text.contains("Thinking...") || msg.text.contains("思考中")))
                             {
                                 msg.text = format!("(Using {}) {}", model_used, delta);
                             } else {
@@ -772,8 +774,9 @@ pub fn run_tui() -> Result<(), io::Error> {
                     app.agent_status = None;
                     if let Some(msg) = app.messages.iter_mut().last() {
                         if msg.text == "Thinking..."
+                            || msg.text == "思考中 / Thinking..."
                             || (msg.text.starts_with("(Routed:")
-                                && msg.text.contains("Thinking..."))
+                                && (msg.text.contains("Thinking...") || msg.text.contains("思考中")))
                         {
                             msg.text =
                                 format!("(Using {}) Operation completed successfully.", model_used);
@@ -800,7 +803,7 @@ pub fn run_tui() -> Result<(), io::Error> {
                         }
                         Err(err) => {
                             if let Some(msg) = app.messages.iter_mut().last() {
-                                if msg.text.contains("Thinking...") {
+                                if msg.text.contains("Thinking...") || msg.text.contains("思考中") {
                                     msg.text = format!("(Using {}) Error: {}", model_used, err);
                                 } else {
                                     msg.text.push_str(&format!("\n[Error: {}]", err));

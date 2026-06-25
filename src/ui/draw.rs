@@ -8,35 +8,25 @@ use ratatui::{
 };
 
 pub fn draw(f: &mut Frame, app: &mut App) {
-    let has_status = app.active_agent.is_some();
-
-    // vertical screen layout
+    // Keep a stable vertical screen layout to prevent flickering
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
-        .constraints(if has_status {
-            vec![
+        .constraints(
+            [
                 Constraint::Length(8), // Spring Boot-style ASCII banner
                 Constraint::Min(3),    // Chat Console log
-                Constraint::Length(1), // Agent status line
+                Constraint::Length(1), // Agent status / Sandbox line
                 Constraint::Length(3), // Input prompt
                 Constraint::Length(3), // Footer instructions
             ]
-        } else {
-            vec![
-                Constraint::Length(8), // Spring Boot-style ASCII banner
-                Constraint::Min(3),    // Chat Console log
-                Constraint::Length(3), // Input prompt
-                Constraint::Length(3), // Footer instructions
-            ]
-        })
+            .as_ref(),
+        )
         .split(f.size());
 
-    let (status_idx, input_idx, footer_idx) = if has_status {
-        (Some(2), 3, 4)
-    } else {
-        (None, 2, 3)
-    };
+    let status_idx = 2;
+    let input_idx = 3;
+    let footer_idx = 4;
 
     // 1. Spring Boot-Style ASCII Banner
     let banner_lines = vec![
@@ -383,39 +373,67 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .scroll((scroll_y, 0));
     f.render_widget(console_block, chunks[1]);
 
-    // 2.5. Agent Status Line (spinner)
-    if let Some(ref status_idx_val) = status_idx {
+    // 2.5. Agent Status / Sandbox Line
+    let status_color = if app.active_agent.is_some() {
+        Color::Yellow
+    } else if app.sandbox_path.is_some() {
+        Color::Green
+    } else {
+        Color::Red
+    };
+
+    let status_text = if let Some(ref custom_status) = app.agent_status {
+        format!("思考中 / Thinking: {}", custom_status)
+    } else if let Some(ref active) = app.active_agent {
+        format!("思考中 / Thinking (Using {})...", active)
+    } else if let Some(ref sandbox) = app.sandbox_path {
+        format!("🟢 Sandbox: {}", sandbox.to_string_lossy())
+    } else {
+        "🔴 No sandbox selected. Run /init or use Sandbox Selector.".to_string()
+    };
+
+    let frame_span = if app.active_agent.is_some() {
         let spinner_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
         let frame = spinner_frames[app.spinner_tick % spinner_frames.len()];
-        let status_text = if let Some(ref custom_status) = app.agent_status {
-            custom_status.clone()
-        } else if let Some(ref active) = app.active_agent {
-            format!("Thinking (Using {})...", active)
-        } else {
-            "Thinking...".to_string()
-        };
-        let status_line = Line::from(vec![
-            Span::styled(format!(" {} ", frame), Style::default().fg(Color::Yellow)),
-            Span::styled(
-                status_text,
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::ITALIC),
-            ),
-        ]);
-        let status_widget = Paragraph::new(status_line);
-        f.render_widget(status_widget, chunks[*status_idx_val]);
-    }
+        Span::styled(format!(" {} ", frame), Style::default().fg(status_color))
+    } else {
+        Span::styled("   ", Style::default())
+    };
+
+    let status_line = Line::from(vec![
+        frame_span,
+        Span::styled(
+            status_text,
+            Style::default()
+                .fg(status_color)
+                .add_modifier(Modifier::ITALIC),
+        ),
+    ]);
+    let status_widget = Paragraph::new(status_line);
+    f.render_widget(status_widget, chunks[status_idx]);
 
     // 3. Input Prompt
     let mut input_text = app.input_text.clone();
     input_text.push('█'); // Block terminal cursor
 
+    let input_title = if app.active_agent.is_some() {
+        let spinner_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+        let frame = spinner_frames[app.spinner_tick % spinner_frames.len()];
+        format!(" {} Type message to COBOLX [思考中 / Thinking...] ", frame)
+    } else {
+        " Type message to COBOLX ".to_string()
+    };
+    let input_border_color = if app.active_agent.is_some() {
+        Color::Yellow
+    } else {
+        Color::Green
+    };
+
     let input_block = Paragraph::new(input_text).block(
         Block::default()
             .borders(Borders::ALL)
-            .title(" Type message to COBOLX ")
-            .border_style(Style::default().fg(Color::Green)),
+            .title(input_title)
+            .border_style(Style::default().fg(input_border_color)),
     );
     f.render_widget(input_block, chunks[input_idx]);
 
