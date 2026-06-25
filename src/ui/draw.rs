@@ -301,18 +301,34 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         };
 
         let lines: Vec<&str> = msg.text.split('\n').collect();
+        let mut in_thinking = false;
         for (i, line_str) in lines.iter().enumerate() {
+            let mut current_style = text_style;
+            let trimmed = line_str.trim();
+            if trimmed.contains("[Thinking Process]") {
+                in_thinking = true;
+            } else if trimmed.contains("[Answer]") {
+                in_thinking = false;
+                continue; // Skip the marker line itself
+            }
+
+            if in_thinking {
+                current_style = Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::ITALIC);
+            }
+
             if i == 0 {
                 display_lines.push(Line::from(vec![
                     time_span.clone(),
                     sender_span.clone(),
                     sep_span.clone(),
-                    Span::styled(*line_str, text_style),
+                    Span::styled(*line_str, current_style),
                 ]));
             } else {
                 display_lines.push(Line::from(vec![Span::styled(
                     format!("               {}", line_str),
-                    text_style,
+                    current_style,
                 )]));
             }
         }

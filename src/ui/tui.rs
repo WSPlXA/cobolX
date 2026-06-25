@@ -432,41 +432,142 @@ impl App {
                                 timestamp: Local::now().format("%H:%M:%S").to_string(),
                             });
                         } else {
-                            let source_count = self
-                                .discovered_files
+                            let sandbox = self.sandbox_path.as_ref().unwrap().clone();
+
+                            // Collect @filename mentions from arguments after /docs
+                            let file_mentions: Vec<String> = parts[1..]
                                 .iter()
-                                .filter(|f| {
-                                    f.file_type == crate::cobol::scanner::CobolFileType::Source
-                                })
-                                .count();
-                            let copy_count = self
-                                .discovered_files
-                                .iter()
-                                .filter(|f| {
-                                    f.file_type == crate::cobol::scanner::CobolFileType::Copybook
-                                })
-                                .count();
-                            // Replace the "/docs" message with a structured documentation prompt
-                            // so the Filesystem Sub-Agent receives a real task
-                            if let Some(last) = self.messages.last_mut() {
-                                last.text = format!(
-                                    "Please generate documentation for this COBOL project and write it to the docs/ directory.\n\
-                                    Project has {} COBOL source file(s) and {} copybook(s).\n\n\
-                                    Steps:\n\
-                                    1. Use list_directory('.') to see the sandbox structure.\n\
-                                    2. For each COBOL source file (.cbl or .cob), use read_file to read its content, \
-                                    then write a Markdown file to docs/<filename>.md that documents:\n\
-                                    - Program name and purpose\n\
-                                    - IDENTIFICATION / ENVIRONMENT / DATA / PROCEDURE divisions found\n\
-                                    - Key data items and their levels\n\
-                                    - CALL statements and copybook dependencies\n\
-                                    3. Finally write a docs/README.md index that lists all documented programs.\n\
-                                    Use relative paths (e.g. docs/MAIN.md) for all write_file calls.",
-                                    source_count, copy_count
-                                );
+                                .filter(|p| p.starts_with('@'))
+                                .map(|p| p.trim_start_matches('@').to_lowercase())
+                                .collect();
+
+                            if file_mentions.is_empty() {
+                                // ── All-files mode ─────────────────────────────────────
+                                let source_count = self.discovered_files.iter()
+                                    .filter(|f| f.file_type == crate::cobol::scanner::CobolFileType::Source)
+                                    .count();
+                                let copy_count = self.discovered_files.iter()
+                                    .filter(|f| f.file_type == crate::cobol::scanner::CobolFileType::Copybook)
+                                    .count();
+                                if let Some(last) = self.messages.last_mut() {
+                                    last.text = format!(
+                                        "Generate Markdown documentation for all COBOL source files in this project \
+                                        ({source_count} source file(s), {copy_count} copybook(s)).\n\n\
+                                        STEP 1 — query_sqlite: SELECT id, path FROM files WHERE kind='source' ORDER BY path\n\n\
+                                        STEP 2 — For EACH file row (using its id and path):\n\
+                                          a) query_sqlite: SELECT id, name FROM programs WHERE file_id=<id>\n\
+                                          b) query_sqlite: SELECT name, level, pic, usage_clause, section \
+                                             FROM data_items WHERE source_file_id=<id> LIMIT 100\n\
+                                          c) query_sqlite: SELECT callee_name, kind FROM call_edges \
+                                             WHERE caller_program_id IN (SELECT id FROM programs WHERE file_id=<id>)\n\
+                                          d) query_sqlite: SELECT copybook_name, resolve_status \
+                                             FROM copybook_uses WHERE from_file_id=<id>\n\
+                                          e) read_file: <path>  (read the actual source text)\n\
+                                          f) write_file: docs/<basename>.md  (Markdown document)\n\n\
+                                        STEP 3 — write_file: docs/README.md  (index listing all programs with links)\n\
+                                        Use relative paths for all write_file calls (e.g. docs/MAIN.md)."
+                                    );
+                                }
+                                is_command = false;
+                            } else {
+                                // ── Specific file(s) mode ──────────────────────────────
+                                // Match mentions against discovered_files by filename
+                                let matched: Vec<(String, String)> = file_mentions
+                                    .iter()
+                                    .filter_map(|mention| {
+                                        self.discovered_files.iter().find(|f| {
+                                            f.path
+                                                .file_name()
+                                                .and_then(|n| n.to_str())
+                                                .map(|n| n.to_lowercase() == *mention)
+                                                .unwrap_or(false)
+                                        })
+                                        .map(|f| {
+                                            // Relative path (for DB queries and read_file)
+                                            let rel = f.path
+                                                .strip_prefix(&sandbox)
+                                                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                                                .unwrap_or_else(|_| {
+                                                    f.path.to_string_lossy().into_owned()
+                                                });
+                                            let stem = f.path
+                                                .file_stem()
+                                                .and_then(|s| s.to_str())
+                                                .unwrap_or(mention.as_str())
+                                                .to_string();
+                                            (rel, stem)
+                                        })
+                                    })
+                                    .collect();
+
+                                let not_found: Vec<&str> = file_mentions
+                                    .iter()
+                                    .filter(|m| {
+                                        !matched.iter().any(|(_, stem)| {
+                                            stem.to_lowercase() == m.trim_end_matches(".cbl")
+                                                .trim_end_matches(".cob")
+                                                .trim_end_matches(".cpy")
+                                        })
+                                    })
+                                    .map(|s| s.as_str())
+                                    .collect();
+
+                                if matched.is_empty() {
+                                    self.messages.push(Message {
+                                        sender: Sender::Cobolx,
+                                        text: format!(
+                                            "File(s) not found in sandbox: {}.\nRun /init first, or check the filename spelling.",
+                                            file_mentions.join(", ")
+                                        ),
+                                        timestamp: Local::now().format("%H:%M:%S").to_string(),
+                                    });
+                                } else {
+                                    let names: Vec<String> =
+                                        matched.iter().map(|(_, b)| b.clone()).collect();
+                                    let per_file: String = matched
+                                        .iter()
+                                        .map(|(rel, stem)| {
+                                            format!(
+                                                "• File: {rel}\n  \
+                                                 a) query_sqlite: SELECT id FROM files WHERE path LIKE '%{rel}%'\n  \
+                                                 b) query_sqlite: SELECT id, name FROM programs WHERE file_id=<id>\n  \
+                                                 c) query_sqlite: SELECT name, level, pic, usage_clause, section \
+                                                    FROM data_items WHERE source_file_id=<id>\n  \
+                                                 d) query_sqlite: SELECT callee_name, kind FROM call_edges \
+                                                    WHERE caller_program_id IN (SELECT id FROM programs WHERE file_id=<id>)\n  \
+                                                 e) query_sqlite: SELECT copybook_name, resolve_status \
+                                                    FROM copybook_uses WHERE from_file_id=<id>\n  \
+                                                 f) read_file: {rel}\n  \
+                                                 g) write_file: docs/{stem}.md"
+                                            )
+                                        })
+                                        .collect::<Vec<_>>()
+                                        .join("\n\n");
+
+                                    let warn = if not_found.is_empty() {
+                                        String::new()
+                                    } else {
+                                        format!("\n\nNote: file(s) not found in index: {}", not_found.join(", "))
+                                    };
+
+                                    if let Some(last) = self.messages.last_mut() {
+                                        last.text = format!(
+                                            "Generate Markdown documentation for: {names}\n\n\
+                                            For EACH file below, follow these steps in order:\n\
+                                            {per_file}\n\n\
+                                            Each docs/<stem>.md must include:\n\
+                                            - Program name and purpose (from IDENTIFICATION DIVISION)\n\
+                                            - Data structure summary (levels, PIC clauses, sections — from DB)\n\
+                                            - CALL graph and COPY dependencies (from DB)\n\
+                                            - Key PROCEDURE paragraphs with brief explanation\n\
+                                            - Notable code excerpts from the source\
+                                            {warn}",
+                                            names = names.join(", ")
+                                        );
+                                    }
+                                    is_command = false;
+                                }
                             }
-                            // Not a command — let trigger_chat_task dispatch to the LLM
-                            is_command = false;
                         }
                     }
                     _ => {
@@ -491,6 +592,16 @@ fn trigger_chat_task(app: &mut App, tx: &tokio::sync::mpsc::UnboundedSender<Task
         return true;
     }
     if is_command {
+        return false;
+    }
+
+    // Block overlapping agent calls — show error, don't spawn a second task
+    if app.active_agent.is_some() {
+        app.messages.push(Message {
+            sender: Sender::Cobolx,
+            text: "Agent is still processing. Please wait until the current response finishes before sending another message.".to_string(),
+            timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
+        });
         return false;
     }
 
@@ -598,13 +709,27 @@ pub fn run_tui() -> Result<(), io::Error> {
                 TaskUpdate::Delta(delta, model_used) => {
                     app.active_agent = Some(model_used.to_string());
                     if let Some(msg) = app.messages.iter_mut().last() {
-                        if msg.text == "Thinking..."
-                            || (msg.text.starts_with("(Routed:")
-                                && msg.text.contains("Thinking..."))
-                        {
-                            msg.text = format!("(Using {}) {}", model_used, delta);
+                        if let Some(reasoning) = delta.strip_prefix("\x01REASONING:") {
+                            if msg.text == "Thinking..."
+                                || (msg.text.starts_with("(Routed:")
+                                    && msg.text.contains("Thinking..."))
+                            {
+                                msg.text = format!("(Using {}) [Thinking Process]\n{}", model_used, reasoning);
+                            } else {
+                                msg.text.push_str(reasoning);
+                            }
                         } else {
-                            msg.text.push_str(&delta);
+                            if msg.text == "Thinking..."
+                                || (msg.text.starts_with("(Routed:")
+                                    && msg.text.contains("Thinking..."))
+                            {
+                                msg.text = format!("(Using {}) {}", model_used, delta);
+                            } else {
+                                if msg.text.contains("[Thinking Process]") && !msg.text.contains("[Answer]") {
+                                    msg.text.push_str("\n[Answer]\n");
+                                }
+                                msg.text.push_str(&delta);
+                            }
                         }
                     }
                 }
@@ -618,6 +743,17 @@ pub fn run_tui() -> Result<(), io::Error> {
                 TaskUpdate::Finished(res, model_used) => {
                     app.active_agent = None;
                     app.agent_status = None;
+                    if let Some(msg) = app.messages.iter_mut().last() {
+                        if msg.text == "Thinking..."
+                            || (msg.text.starts_with("(Routed:")
+                                && msg.text.contains("Thinking..."))
+                        {
+                            msg.text = format!(
+                                "(Using {}) Operation completed successfully.",
+                                model_used
+                            );
+                        }
+                    }
                     match res {
                         Ok(Some(usage)) => {
                             app.last_model = Some(model_used.to_string());
