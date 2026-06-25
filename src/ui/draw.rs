@@ -340,7 +340,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
 
     let scroll_y = if total_wrapped_height > available_lines {
-        (total_wrapped_height - available_lines) as u16
+        let auto = (total_wrapped_height - available_lines) as u16;
+        auto.saturating_sub(app.console_scroll_offset)
     } else {
         0
     };
@@ -397,7 +398,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     f.render_widget(input_block, chunks[input_idx]);
 
     // 4. Footer Help
-    let help_text = " Type /help for commands | Enter: Send | Esc (when input is empty): Exit TUI | Ctrl+C: Force Exit ";
+    let help_text = " /help: Commands | Enter: Send | PgUp/PgDn or ↑↓: Scroll console | Esc (empty): Exit | Ctrl+C: Force Exit ";
     let help_block = Paragraph::new(help_text).block(
         Block::default()
             .borders(Borders::ALL)

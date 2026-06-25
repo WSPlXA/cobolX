@@ -78,6 +78,7 @@ pub struct App {
     pub active_agent: Option<String>,
     pub agent_status: Option<String>,
     pub spinner_tick: usize,
+    pub console_scroll_offset: u16,
 }
 
 impl App {
@@ -138,6 +139,7 @@ impl App {
             active_agent: None,
             agent_status: None,
             spinner_tick: 0,
+            console_scroll_offset: 0,
         }
     }
 
@@ -490,6 +492,9 @@ fn trigger_chat_task(app: &mut App, tx: &tokio::sync::mpsc::UnboundedSender<Task
     let sandbox_path = app.sandbox_path.clone();
     let tx = tx.clone();
 
+    // Snap console to bottom when user submits a new message
+    app.console_scroll_offset = 0;
+
     // Add a placeholder message for the incoming streaming response
     app.messages.push(Message {
         sender: Sender::Cobolx,
@@ -783,6 +788,9 @@ pub fn run_tui() -> Result<(), io::Error> {
                                 if len > 0 {
                                     app.dropdown_index = (app.dropdown_index + 1) % len;
                                 }
+                            } else if !app.show_dropdown {
+                                app.console_scroll_offset =
+                                    app.console_scroll_offset.saturating_sub(3);
                             }
                         }
                         KeyCode::Up => {
@@ -795,7 +803,18 @@ pub fn run_tui() -> Result<(), io::Error> {
                                 if len > 0 {
                                     app.dropdown_index = (app.dropdown_index + len - 1) % len;
                                 }
+                            } else if !app.show_dropdown {
+                                app.console_scroll_offset =
+                                    app.console_scroll_offset.saturating_add(3);
                             }
+                        }
+                        KeyCode::PageUp => {
+                            app.console_scroll_offset =
+                                app.console_scroll_offset.saturating_add(10);
+                        }
+                        KeyCode::PageDown => {
+                            app.console_scroll_offset =
+                                app.console_scroll_offset.saturating_sub(10);
                         }
                         KeyCode::Enter => {
                             if app.show_dropdown && has_options {

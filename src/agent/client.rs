@@ -745,7 +745,7 @@ impl AgentRouter {
 
         let mut final_usage = Usage::default();
 
-        for _turn in 0..5 {
+        for _turn in 0..10 {
             let request_body = ChatRequest {
                 model: model_name.to_string(),
                 messages: messages.clone(),
@@ -774,6 +774,7 @@ impl AgentRouter {
             let mut stream = response.bytes_stream();
             let mut buffer = String::new();
             let mut tool_calls_accumulated: Vec<ToolCall> = Vec::new();
+            let mut text_accumulated = String::new();
 
             while let Some(chunk_res) = stream.next().await {
                 let chunk = chunk_res.map_err(|e| format!("Stream read error: {}", e))?;
@@ -801,6 +802,7 @@ impl AgentRouter {
                             if let Some(choice) = parsed.choices.first() {
                                 if let Some(ref content) = choice.delta.content {
                                     if !content.is_empty() {
+                                        text_accumulated.push_str(content);
                                         let _ = tx.send(content.clone());
                                     }
                                 }
@@ -823,7 +825,11 @@ impl AgentRouter {
 
                 let assistant_msg = ChatMessage {
                     role: "assistant".to_string(),
-                    content: None,
+                    content: if text_accumulated.is_empty() {
+                        None
+                    } else {
+                        Some(text_accumulated)
+                    },
                     tool_call_id: None,
                     tool_calls: Some(tool_calls_accumulated.clone()),
                 };
@@ -1082,7 +1088,7 @@ impl AgentRouter {
         ];
         let mut final_usage = Usage::default();
 
-        for _turn in 0..8 {
+        for _turn in 0..20 {
             let request_body = ChatRequest {
                 model: model_name.to_string(),
                 messages: messages.clone(),
@@ -1111,6 +1117,7 @@ impl AgentRouter {
             let mut stream = response.bytes_stream();
             let mut buffer = String::new();
             let mut tool_calls_accumulated: Vec<ToolCall> = Vec::new();
+            let mut text_accumulated = String::new();
 
             while let Some(chunk_res) = stream.next().await {
                 let chunk = chunk_res.map_err(|e| format!("Stream read error: {e}"))?;
@@ -1135,6 +1142,7 @@ impl AgentRouter {
                             if let Some(choice) = parsed.choices.first() {
                                 if let Some(ref content) = choice.delta.content {
                                     if !content.is_empty() {
+                                        text_accumulated.push_str(content);
                                         let _ = tx.send(content.clone());
                                     }
                                 }
@@ -1156,7 +1164,11 @@ impl AgentRouter {
 
             let assistant_msg = ChatMessage {
                 role: "assistant".to_string(),
-                content: None,
+                content: if text_accumulated.is_empty() {
+                    None
+                } else {
+                    Some(text_accumulated)
+                },
                 tool_call_id: None,
                 tool_calls: Some(tool_calls_accumulated.clone()),
             };
