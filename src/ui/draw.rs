@@ -8,20 +8,37 @@ use ratatui::{
 };
 
 pub fn draw(f: &mut Frame, app: &mut App) {
+    let has_status = app.agent_status.is_some();
+
     // vertical screen layout
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
         .constraints(
-            [
-                Constraint::Length(8), // Spring Boot-style ASCII banner
-                Constraint::Min(3),    // Chat Console log
-                Constraint::Length(3), // Input prompt
-                Constraint::Length(3), // Footer instructions
-            ]
-            .as_ref(),
+            if has_status {
+                vec![
+                    Constraint::Length(8), // Spring Boot-style ASCII banner
+                    Constraint::Min(3),    // Chat Console log
+                    Constraint::Length(1), // Agent status line
+                    Constraint::Length(3), // Input prompt
+                    Constraint::Length(3), // Footer instructions
+                ]
+            } else {
+                vec![
+                    Constraint::Length(8), // Spring Boot-style ASCII banner
+                    Constraint::Min(3),    // Chat Console log
+                    Constraint::Length(3), // Input prompt
+                    Constraint::Length(3), // Footer instructions
+                ]
+            },
         )
         .split(f.size());
+
+    let (status_idx, input_idx, footer_idx) = if has_status {
+        (Some(2), 3, 4)
+    } else {
+        (None, 2, 3)
+    };
 
     // 1. Spring Boot-Style ASCII Banner
     let banner_lines = vec![
@@ -105,10 +122,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 .title(" Sandbox Selector Instructions ")
                 .border_style(Style::default().fg(Color::DarkGray)),
         );
-        f.render_widget(sandbox_help_block, chunks[2]);
+        f.render_widget(sandbox_help_block, chunks[input_idx]);
 
         let empty_block = Paragraph::new("").block(Block::default().borders(Borders::NONE));
-        f.render_widget(empty_block, chunks[3]);
+        f.render_widget(empty_block, chunks[footer_idx]);
 
         return;
     }
@@ -198,10 +215,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 .title(" Config Instructions ")
                 .border_style(Style::default().fg(Color::DarkGray)),
         );
-        f.render_widget(config_help_block, chunks[2]);
+        f.render_widget(config_help_block, chunks[input_idx]);
 
         let empty_block = Paragraph::new("").block(Block::default().borders(Borders::NONE));
-        f.render_widget(empty_block, chunks[3]);
+        f.render_widget(empty_block, chunks[footer_idx]);
 
         return;
     }
@@ -292,6 +309,19 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .scroll((scroll_y, 0));
     f.render_widget(console_block, chunks[1]);
 
+    // 2.5. Agent Status Line (spinner)
+    if let Some(ref status_idx_val) = status_idx {
+        let spinner_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+        let frame = spinner_frames[app.spinner_tick % spinner_frames.len()];
+        let status_text = app.agent_status.as_deref().unwrap_or("");
+        let status_line = Line::from(vec![
+            Span::styled(format!(" {} ", frame), Style::default().fg(Color::Yellow)),
+            Span::styled(status_text, Style::default().fg(Color::Yellow).add_modifier(Modifier::ITALIC)),
+        ]);
+        let status_widget = Paragraph::new(status_line);
+        f.render_widget(status_widget, chunks[*status_idx_val]);
+    }
+
     // 3. Input Prompt
     let mut input_text = app.input_text.clone();
     input_text.push('█'); // Block terminal cursor
@@ -302,7 +332,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             .title(" Type message to COBOLX ")
             .border_style(Style::default().fg(Color::Green)),
     );
-    f.render_widget(input_block, chunks[2]);
+    f.render_widget(input_block, chunks[input_idx]);
 
     // 4. Footer Help
     let help_text = " Type /help for commands | Enter: Send | Esc (when input is empty): Exit TUI | Ctrl+C: Force Exit ";
@@ -312,7 +342,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             .title(" Instructions ")
             .border_style(Style::default().fg(Color::DarkGray)),
     );
-    f.render_widget(help_block, chunks[3]);
+    f.render_widget(help_block, chunks[footer_idx]);
 
     // 5. Autocomplete Dropdown popup (renders overlay above input prompt)
     let dropdown_type = app.get_dropdown_type();
@@ -348,38 +378,68 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                         ]))
                     })
                     .collect();
-                (list_items, " Commands ")
+                (list_items, " Commands ".to_string())
             }
             crate::ui::tui::DropdownType::Files => {
                 let filtered = app.get_filtered_files();
-                let list_items: Vec<ListItem> = filtered
+                let max_visible = 10;
+                let total = filtered.len();
+                let start = if total <= max_visible {
+                    0
+                } else if app.dropdown_index < max_visible / 2 {
+                    0
+                } else if app.dropdown_index >= total - max_visible / 2 {
+                    total - max_visible
+                } else {
+                    app.dropdown_index - max_visible / 2
+                };
+                let end = (start + max_visible).min(total);
+                let list_items: Vec<ListItem> = filtered[start..end]
                     .iter()
                     .enumerate()
-                    .take(10)
-                    .map(|(idx, file)| {
-                        let style = if idx == app.dropdown_index {
+                    .map(|(i, file)| {
+                        let actual_idx = start + i;
+                        let style = if actual_idx == app.dropdown_index {
                             Style::default().fg(Color::Black).bg(Color::Green)
                         } else {
                             Style::default().fg(Color::Green)
                         };
 
+                        let indicator = if total > max_visible {
+                            if actual_idx == start && start > 0 {
+                                " ▲"
+                            } else if actual_idx == end - 1 && end < total {
+                                " ▼"
+                            } else {
+                                ""
+                            }
+                        } else {
+                            ""
+                        };
+
                         ListItem::new(Line::from(vec![
                             Span::styled(file.clone(), style),
+                            Span::styled(indicator, Style::default().fg(Color::DarkGray)),
                         ]))
                     })
                     .collect();
-                (list_items, " Files ")
+                let title = if total > max_visible {
+                    format!(" Files ({}/{}) ", app.dropdown_index + 1, total)
+                } else {
+                    " Files ".to_string()
+                };
+                (list_items, title)
             }
-            _ => (Vec::new(), ""),
+            _ => (Vec::new(), String::new()),
         };
 
         if !items.is_empty() {
             let popup_height = (items.len() + 2) as u16;
             let popup_width = 45;
             let popup_rect = Rect {
-                x: chunks[2].x + 2,
-                y: chunks[2].y.saturating_sub(popup_height),
-                width: popup_width.min(chunks[2].width - 4),
+                x: chunks[input_idx].x + 2,
+                y: chunks[input_idx].y.saturating_sub(popup_height),
+                width: popup_width.min(chunks[input_idx].width - 4),
                 height: popup_height,
             };
 

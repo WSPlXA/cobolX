@@ -47,6 +47,7 @@ pub enum DropdownType {
 pub enum TaskUpdate {
     Routed(crate::agent::client::Route, &'static str),
     Delta(String, &'static str),
+    Status(String),
     Finished(Result<Option<crate::agent::client::Usage>, String>, &'static str),
 }
 
@@ -72,6 +73,8 @@ pub struct App {
     pub sandbox_path: Option<std::path::PathBuf>,
     pub discovered_files: Vec<crate::cobol::scanner::CobolFileEntry>,
     pub active_agent: Option<String>,
+    pub agent_status: Option<String>,
+    pub spinner_tick: usize,
 }
 
 impl App {
@@ -127,6 +130,8 @@ impl App {
             sandbox_path: None,
             discovered_files: Vec::new(),
             active_agent: None,
+            agent_status: None,
+            spinner_tick: 0,
         }
     }
 
@@ -453,6 +458,7 @@ fn trigger_chat_task(app: &mut App, tx: &tokio::sync::mpsc::UnboundedSender<Task
             crate::agent::client::Route::Light => "Lightweight Model (DeepSeek)",
             crate::agent::client::Route::Heavy => "Heavy Model (GLM-4-Pro)",
             crate::agent::client::Route::Database => "Database Sub-Agent",
+            crate::agent::client::Route::Filesystem => "Filesystem Sub-Agent",
         };
 
         let _ = tx.send(TaskUpdate::Routed(route, route_name));
@@ -463,7 +469,11 @@ fn trigger_chat_task(app: &mut App, tx: &tokio::sync::mpsc::UnboundedSender<Task
         let tx_clone = tx.clone();
         let stream_handle = tokio::spawn(async move {
             while let Some(delta) = stream_rx.recv().await {
-                let _ = tx_clone.send(TaskUpdate::Delta(delta, route_name));
+                if let Some(status) = delta.strip_prefix("\x01STATUS:") {
+                    let _ = tx_clone.send(TaskUpdate::Status(status.to_string()));
+                } else {
+                    let _ = tx_clone.send(TaskUpdate::Delta(delta, route_name));
+                }
             }
         });
 
@@ -503,8 +513,14 @@ pub fn run_tui() -> Result<(), io::Error> {
         // Check for updates
         while let Ok(update) = rx.try_recv() {
             match update {
-                TaskUpdate::Routed(_route, model_used) => {
+                TaskUpdate::Routed(ref route, model_used) => {
                     app.active_agent = Some(model_used.to_string());
+                    if matches!(
+                        route,
+                        crate::agent::client::Route::Database | crate::agent::client::Route::Filesystem
+                    ) {
+                        app.agent_status = Some(format!("Using {}", model_used));
+                    }
                     if let Some(msg) = app.messages.iter_mut().last() {
                         if msg.text == "Thinking..." {
                             msg.text = format!("(Routed: {})\nThinking...", model_used);
@@ -521,8 +537,16 @@ pub fn run_tui() -> Result<(), io::Error> {
                         }
                     }
                 }
+                TaskUpdate::Status(status) => {
+                    if status.is_empty() {
+                        app.agent_status = None;
+                    } else {
+                        app.agent_status = Some(status);
+                    }
+                }
                 TaskUpdate::Finished(res, model_used) => {
                     app.active_agent = None;
+                    app.agent_status = None;
                     match res {
                         Ok(Some(usage)) => {
                             app.last_model = Some(model_used.to_string());
@@ -556,6 +580,9 @@ pub fn run_tui() -> Result<(), io::Error> {
             }
         }
 
+        if app.agent_status.is_some() {
+            app.spinner_tick = app.spinner_tick.wrapping_add(1);
+        }
         terminal.draw(|f| draw::draw(f, &mut app))?;
 
         // Non-blocking poll for crossterm events
