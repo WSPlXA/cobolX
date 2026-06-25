@@ -421,7 +421,8 @@ impl App {
                         if self.sandbox_path.is_none() {
                             self.messages.push(Message {
                                 sender: Sender::Cobolx,
-                                text: "No sandbox directory set. Please select a sandbox first.".to_string(),
+                                text: "No sandbox directory set. Please select a sandbox first."
+                                    .to_string(),
                                 timestamp: Local::now().format("%H:%M:%S").to_string(),
                             });
                         } else if self.discovered_files.is_empty() {
@@ -431,11 +432,19 @@ impl App {
                                 timestamp: Local::now().format("%H:%M:%S").to_string(),
                             });
                         } else {
-                            let source_count = self.discovered_files.iter()
-                                .filter(|f| f.file_type == crate::cobol::scanner::CobolFileType::Source)
+                            let source_count = self
+                                .discovered_files
+                                .iter()
+                                .filter(|f| {
+                                    f.file_type == crate::cobol::scanner::CobolFileType::Source
+                                })
                                 .count();
-                            let copy_count = self.discovered_files.iter()
-                                .filter(|f| f.file_type == crate::cobol::scanner::CobolFileType::Copybook)
+                            let copy_count = self
+                                .discovered_files
+                                .iter()
+                                .filter(|f| {
+                                    f.file_type == crate::cobol::scanner::CobolFileType::Copybook
+                                })
                                 .count();
                             // Replace the "/docs" message with a structured documentation prompt
                             // so the Filesystem Sub-Agent receives a real task
