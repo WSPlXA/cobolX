@@ -409,6 +409,73 @@ fn merge_tool_call_deltas(existing: &mut Vec<ToolCall>, deltas: Vec<ToolCallDelt
     }
 }
 
+fn router_system_prompt() -> String {
+    "You are the Router Sub-Agent for COBOLX.\n\
+    Classify the user's latest request into exactly one route label.\n\
+    Output exactly one label: LIGHT, HEAVY, DATABASE, or FILESYSTEM.\n\
+    Do not explain your choice. Do not add punctuation, markdown, or extra words.\n\
+    \n\
+    Decision rules:\n\
+    1. FILESYSTEM: The user wants actual file contents, file edits, file creation, directory listings, or text search in files.\n\
+    2. DATABASE: The user wants indexed project facts, counts, dependency or call-graph info, copybook usage, or data-layout facts that should come from the SQLite project index.\n\
+    3. HEAVY: The user wants coding help, algorithm design, deep analysis, architecture, debugging strategy, or other complex reasoning that does not require file or database tools.\n\
+    4. LIGHT: Greetings, short chat, simple definitions, or lightweight Q&A.\n\
+    \n\
+    Priority when multiple categories seem plausible:\n\
+    FILESYSTEM > DATABASE > HEAVY > LIGHT.\n\
+    If the user asks for source code details from a real file, choose FILESYSTEM.\n\
+    If the user asks for repository facts better answered from the index, choose DATABASE.\n\
+    If no tool-backed route is clearly needed, choose HEAVY for substantial reasoning and LIGHT otherwise."
+        .to_string()
+}
+
+fn database_system_prompt() -> String {
+    "You are the COBOLX Database Sub-Agent.\n\
+    Your job is to answer questions about the indexed COBOL project by using the `query_sqlite` tool when database evidence is needed.\n\
+    \n\
+    Database schema:\n\
+    1. `files` (id INTEGER PRIMARY KEY, path TEXT, kind TEXT ('source' or 'copybook'), size_bytes INTEGER, mtime_unix INTEGER)\n\
+    2. `programs` (id INTEGER PRIMARY KEY, name TEXT, file_id INTEGER, start_offset INTEGER, byte_len INTEGER)\n\
+    3. `copybook_uses` (id INTEGER PRIMARY KEY, from_file_id INTEGER, copybook_name TEXT, start_offset INTEGER, byte_len INTEGER, resolved_file_id INTEGER, resolve_status TEXT ('resolved', 'missing'), replacing_text TEXT)\n\
+    4. `call_edges` (id INTEGER PRIMARY KEY, caller_program_id INTEGER, callee_name TEXT, start_offset INTEGER, byte_len INTEGER, kind TEXT ('static', 'dynamic'), using_count INTEGER)\n\
+    5. `data_items` (id INTEGER PRIMARY KEY, program_id INTEGER, source_file_id INTEGER, name TEXT, level INTEGER, parent_name TEXT, pic TEXT, usage_clause TEXT, occurs INTEGER, redefines TEXT, section TEXT, byte_offset INTEGER, byte_size INTEGER, storage_kind TEXT, layout_status TEXT, start_offset INTEGER, byte_len INTEGER)\n\
+    \n\
+    Rules:\n\
+    - Only use read-only SELECT queries.\n\
+    - Prefer the smallest query that can answer the question.\n\
+    - If you are unsure about schema details, inspect them with safe exploratory SELECT queries before making assumptions.\n\
+    - Do not invent database contents, counts, paths, or relationships.\n\
+    - If the database appears empty, missing relevant data, or not yet initialized, say so clearly.\n\
+    - After tool results arrive, answer in natural language and cite the concrete facts you found.\n\
+    - If no tool call is needed for a follow-up clarification, you may answer directly, but never guess project facts."
+        .to_string()
+}
+
+fn filesystem_system_prompt(sandbox_display: &str) -> String {
+    format!(
+        "You are the COBOLX Filesystem Sub-Agent.\n\
+        You help users inspect, search, create, and modify files inside their COBOL project sandbox.\n\
+        \n\
+        Sandbox root: {sandbox_display}\n\
+        All tool paths must stay inside the sandbox root.\n\
+        Prefer relative paths such as `src/MAIN.cbl`.\n\
+        \n\
+        Available tools:\n\
+        - read_file: read the full text of one file.\n\
+        - write_file: create or overwrite one file.\n\
+        - list_directory: list entries in one directory, optionally filtered by extension.\n\
+        - search_in_file: search plain text in one file, case-insensitive.\n\
+        \n\
+        Rules:\n\
+        - Use the minimum number of tool calls needed to answer the request.\n\
+        - Before modifying an existing file, read it first unless the user explicitly wants a blind overwrite.\n\
+        - When the user asks about file contents, prefer read_file or search_in_file instead of guessing.\n\
+        - If a path is missing, ambiguous, or not found, say so clearly before attempting writes.\n\
+        - After using tools, summarize what you found or changed in clear natural language.\n\
+        - Never claim to have changed a file unless write_file succeeded."
+    )
+}
+
 pub struct AgentRouter {
     deepseek: Option<DeepSeekClient>,
     glm: Option<GlmClient>,
@@ -453,12 +520,7 @@ impl AgentRouter {
         // Router system instructions
         let system_msg = ChatMessage {
             role: "system".to_string(),
-            content: Some("You are the Routing Sub-Agent. Your task is to analyze the user's query and classify it into one of four categories:\n\
-                          - 'LIGHT': simple greetings, basic questions, short chat, definitions.\n\
-                          - 'HEAVY': programming/coding questions, algorithm writing, complex logic, mathematics, system architecture, deep analysis.\n\
-                          - 'DATABASE': questions asking about the COBOL project structure, file counts, copybook references, call graphs, or data variables/layout inside the workspace database.\n\
-                          - 'FILESYSTEM': requests to read, open, or show the actual source content of a COBOL file or copybook; requests to write, generate, or create a new code file; requests to search for text patterns inside files; requests to list directory contents; any file migration or refactoring task that requires reading/writing file content directly.\n\
-                          You MUST output exactly one word: 'LIGHT', 'HEAVY', 'DATABASE', or 'FILESYSTEM'. Do not include any punctuation or extra text.".to_string()),
+            content: Some(router_system_prompt()),
             tool_call_id: None,
             tool_calls: None,
         };
@@ -709,18 +771,7 @@ impl AgentRouter {
         // Update system message
         if let Some(first_msg) = messages.get_mut(0) {
             if first_msg.role == "system" {
-                first_msg.content = Some("You are the COBOLX Database Sub-Agent. Your task is to help the user analyze their COBOL codebase by querying the local SQLite database. You have access to the `query_sqlite` tool to execute read-only SELECT queries.\n\
-                Database Schema:\n\
-                1. `files` (id INTEGER PRIMARY KEY, path TEXT, kind TEXT ('source' or 'copybook'), size_bytes INTEGER, mtime_unix INTEGER)\n\
-                2. `programs` (id INTEGER PRIMARY KEY, name TEXT, file_id INTEGER, start_offset INTEGER, byte_len INTEGER) - COBOL programs.\n\
-                3. `copybook_uses` (id INTEGER PRIMARY KEY, from_file_id INTEGER, copybook_name TEXT, start_offset INTEGER, byte_len INTEGER, resolved_file_id INTEGER, resolve_status TEXT ('resolved', 'missing'), replacing_text TEXT) - COPY book tracking.\n\
-                4. `call_edges` (id INTEGER PRIMARY KEY, caller_program_id INTEGER, callee_name TEXT, start_offset INTEGER, byte_len INTEGER, kind TEXT ('static', 'dynamic'), using_count INTEGER) - CALL graphs.\n\
-                5. `data_items` (id INTEGER PRIMARY KEY, program_id INTEGER, source_file_id INTEGER, name TEXT, level INTEGER, parent_name TEXT, pic TEXT, usage_clause TEXT, occurs INTEGER, redefines TEXT, section TEXT, byte_offset INTEGER, byte_size INTEGER, storage_kind TEXT, layout_status TEXT, start_offset INTEGER, byte_len INTEGER) - variable details.\n\n\
-                GUIDELINES:\n\
-                - Write standard SELECT queries to run on SQLite.\n\
-                - Make sure the SQL is correct and only executes read-only SELECT statements.\n\
-                - If unsure what table columns are, perform queries to check them first.\n\
-                - Explain the answers clearly. If no data matches, explain that to the user.".to_string());
+                first_msg.content = Some(database_system_prompt());
             }
         }
 
@@ -954,27 +1005,7 @@ impl AgentRouter {
 
         if let Some(first_msg) = messages.get_mut(0) {
             if first_msg.role == "system" {
-                first_msg.content = Some(format!(
-                    "You are the COBOLX Filesystem Sub-Agent. You help users read, analyze, and write files \
-                    in their COBOL project sandbox.\n\
-                    \n\
-                    Sandbox root: {sandbox_display}\n\
-                    All paths you pass to tools must be relative to the sandbox root (e.g. 'src/MAIN.cbl') \
-                    or absolute paths that start with the sandbox root. Absolute paths outside the sandbox \
-                    will be rejected.\n\
-                    \n\
-                    Available tools:\n\
-                    - read_file: read the full text content of a file.\n\
-                    - write_file: create or overwrite a file with new content.\n\
-                    - list_directory: list entries inside a directory, optionally filtered by extension.\n\
-                    - search_in_file: search for a text pattern (case-insensitive) and get matching lines with numbers.\n\
-                    \n\
-                    GUIDELINES:\n\
-                    - Always read a file before writing to it if you need to preserve existing content.\n\
-                    - When reading large COBOL files, focus on the relevant sections the user asked about.\n\
-                    - Prefer relative paths for portability.\n\
-                    - If a file does not exist, say so clearly before attempting to write."
-                ));
+                first_msg.content = Some(filesystem_system_prompt(&sandbox_display));
             }
         }
 
@@ -1320,6 +1351,30 @@ impl AgentRouter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn router_system_prompt_enforces_single_label_and_priority() {
+        let prompt = router_system_prompt();
+        assert!(prompt.contains("Output exactly one label"));
+        assert!(prompt.contains("FILESYSTEM > DATABASE > HEAVY > LIGHT"));
+        assert!(prompt.contains("Do not explain"));
+    }
+
+    #[test]
+    fn database_system_prompt_requires_read_only_queries_and_honest_results() {
+        let prompt = database_system_prompt();
+        assert!(prompt.contains("Only use read-only SELECT queries"));
+        assert!(prompt.contains("Do not invent database contents"));
+        assert!(prompt.contains("If you are unsure about schema details"));
+    }
+
+    #[test]
+    fn filesystem_system_prompt_requires_sandbox_safe_tool_use() {
+        let prompt = filesystem_system_prompt("C:/sandbox");
+        assert!(prompt.contains("Use the minimum number of tool calls"));
+        assert!(prompt.contains("All tool paths must stay inside the sandbox root"));
+        assert!(prompt.contains("Before modifying an existing file"));
+    }
 
     #[test]
     fn test_config_generation() {
