@@ -430,6 +430,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                             "/config" => " Open API configuration",
                             "/tokens" => " Show token consumption statistics",
                             "/init" => "   Scan sandbox directory for COBOL",
+                            "/docs" => "   Generate docs for all COBOL files",
                             "/exit" => "  Exit TUI",
                             _ => "",
                         };

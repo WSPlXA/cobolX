@@ -150,6 +150,7 @@ impl App {
             "/config".to_string(),
             "/tokens".to_string(),
             "/init".to_string(),
+            "/docs".to_string(),
             "/exit".to_string(),
         ];
         if !self.input_text.starts_with('/') {
@@ -270,6 +271,7 @@ impl App {
                                             /config           - Open the interactive API Key Configuration Screen\n\
                                             /tokens           - Show model routing and token consumption statistics\n\
                                             /init             - Scan the sandbox directory for COBOL files\n\
+                                            /docs             - Generate Markdown documentation for all COBOL files into docs/\n\
                                             /exit             - Close the interactive console";
                         self.messages.push(Message {
                             sender: Sender::Cobolx,
@@ -412,6 +414,49 @@ impl App {
                             text: stats,
                             timestamp: Local::now().format("%H:%M:%S").to_string(),
                         });
+                    }
+                    "docs" => {
+                        if self.sandbox_path.is_none() {
+                            self.messages.push(Message {
+                                sender: Sender::Cobolx,
+                                text: "No sandbox directory set. Please select a sandbox first.".to_string(),
+                                timestamp: Local::now().format("%H:%M:%S").to_string(),
+                            });
+                        } else if self.discovered_files.is_empty() {
+                            self.messages.push(Message {
+                                sender: Sender::Cobolx,
+                                text: "No COBOL files found. Run /init to scan the sandbox directory first.".to_string(),
+                                timestamp: Local::now().format("%H:%M:%S").to_string(),
+                            });
+                        } else {
+                            let source_count = self.discovered_files.iter()
+                                .filter(|f| f.file_type == crate::cobol::scanner::CobolFileType::Source)
+                                .count();
+                            let copy_count = self.discovered_files.iter()
+                                .filter(|f| f.file_type == crate::cobol::scanner::CobolFileType::Copybook)
+                                .count();
+                            // Replace the "/docs" message with a structured documentation prompt
+                            // so the Filesystem Sub-Agent receives a real task
+                            if let Some(last) = self.messages.last_mut() {
+                                last.text = format!(
+                                    "Please generate documentation for this COBOL project and write it to the docs/ directory.\n\
+                                    Project has {} COBOL source file(s) and {} copybook(s).\n\n\
+                                    Steps:\n\
+                                    1. Use list_directory('.') to see the sandbox structure.\n\
+                                    2. For each COBOL source file (.cbl or .cob), use read_file to read its content, \
+                                    then write a Markdown file to docs/<filename>.md that documents:\n\
+                                    - Program name and purpose\n\
+                                    - IDENTIFICATION / ENVIRONMENT / DATA / PROCEDURE divisions found\n\
+                                    - Key data items and their levels\n\
+                                    - CALL statements and copybook dependencies\n\
+                                    3. Finally write a docs/README.md index that lists all documented programs.\n\
+                                    Use relative paths (e.g. docs/MAIN.md) for all write_file calls.",
+                                    source_count, copy_count
+                                );
+                            }
+                            // Not a command — let trigger_chat_task dispatch to the LLM
+                            is_command = false;
+                        }
                     }
                     _ => {
                         self.messages.push(Message {
