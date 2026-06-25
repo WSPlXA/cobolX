@@ -3,3 +3,4 @@ pub mod agent;
 pub mod ui;
 pub mod config;
 pub mod cobol;
+pub mod memory;

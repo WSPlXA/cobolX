@@ -216,7 +216,7 @@ impl App {
                                     if self.discovered_files.is_empty() {
                                         self.messages.push(Message {
                                             sender: Sender::Cobolx,
-                                            text: "No COBOL files found in the sandbox (supported: .cbl, .cob, .cpy, .coo).\nSkips: .git, target, node_modules, vendor, build, hidden dirs.".to_string(),
+                                            text: "No COBOL files found in the sandbox (supported: .cbl, .cob, .cpy, .coo).".to_string(),
                                             timestamp: Local::now().format("%H:%M:%S").to_string(),
                                         });
                                     } else {
