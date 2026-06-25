@@ -6,6 +6,27 @@ use super::types::{
 use crate::memory::MemoryStore;
 use std::path::Path;
 
+fn build_database_query_tool() -> Tool {
+    Tool {
+        r#type: "function".to_string(),
+        function: FunctionDefinition {
+            name: "query_sqlite".to_string(),
+            description: "Run one read-only SELECT query against the indexed project SQLite database. Use this for project facts from files, programs, data_items, call_edges, copybook_uses, and other indexed COBOL metadata. Do not use it for writes, DDL, or guesses."
+                .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "sql": {
+                        "type": "string",
+                        "description": "A single SQLite SELECT statement that reads indexed project data."
+                    }
+                },
+                "required": ["sql"]
+            }),
+        },
+    }
+}
+
 impl AgentRouter {
     pub(crate) async fn run_database_agent_stream(
         &self,
@@ -57,23 +78,7 @@ impl AgentRouter {
             }
         }
 
-        let query_sqlite_tool = Tool {
-            r#type: "function".to_string(),
-            function: FunctionDefinition {
-                name: "query_sqlite".to_string(),
-                description: "Run a read-only SELECT query against the local SQLite database \
-                    indexing the COBOL project structure."
-                    .to_string(),
-                parameters: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "sql": { "type": "string", "description": "The SQLite SELECT statement." }
-                    },
-                    "required": ["sql"]
-                }),
-            },
-        };
-        let tools = vec![query_sqlite_tool];
+        let tools = vec![build_database_query_tool()];
         let mut final_usage = Usage::default();
 
         for _turn in 0..10 {
@@ -185,8 +190,15 @@ impl AgentRouter {
                         .get("sql")
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
-                    let db_result = match store.query_readonly(sql) {
-                        Ok(json_val) => json_val.to_string(),
+                    let db_result = match store.project_index_is_empty() {
+                        Ok(true) => serde_json::json!({
+                            "error": "Project index is empty. Run /init before asking database questions."
+                        })
+                        .to_string(),
+                        Ok(false) => match store.query_readonly(sql) {
+                            Ok(json_val) => json_val.to_string(),
+                            Err(err) => serde_json::json!({ "error": err.to_string() }).to_string(),
+                        },
                         Err(err) => serde_json::json!({ "error": err.to_string() }).to_string(),
                     };
                     messages.push(ChatMessage {
@@ -202,5 +214,22 @@ impl AgentRouter {
 
         let _ = tx.send("\x01STATUS:".to_string());
         Ok(Some(final_usage))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn database_query_tool_description_spells_out_readonly_scope() {
+        let tool = build_database_query_tool();
+        assert!(tool.function.description.contains("SELECT"));
+        assert!(tool.function.description.contains("read-only"));
+        assert!(
+            tool.function
+                .description
+                .contains("files, programs, data_items, call_edges, copybook_uses")
+        );
     }
 }

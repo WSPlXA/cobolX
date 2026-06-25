@@ -6,6 +6,18 @@ use super::types::{
 use crate::memory::MemoryStore;
 use std::path::Path;
 
+fn truncate_utf8_preview(content: &str, max_bytes: usize) -> &str {
+    if content.len() <= max_bytes {
+        return content;
+    }
+
+    let mut end = max_bytes;
+    while end > 0 && !content.is_char_boundary(end) {
+        end -= 1;
+    }
+    &content[..end]
+}
+
 impl AgentRouter {
     /// Validates `user_path` resolves inside `sandbox`.
     /// Returns the canonical absolute path or an error string.
@@ -62,7 +74,11 @@ impl AgentRouter {
         let canon_existing = existing
             .canonicalize()
             .map_err(|e| format!("Path resolution error: {e}"))?;
-        let resolved = canon_existing.join(&suffix);
+        let resolved = if suffix.as_os_str().is_empty() {
+            canon_existing.clone()
+        } else {
+            canon_existing.join(&suffix)
+        };
         let resolved_str = clean_canon(&resolved);
 
         let is_sub = resolved_str == sandbox_canon_str
@@ -253,12 +269,18 @@ impl AgentRouter {
                 function: FunctionDefinition {
                     name: "query_sqlite".to_string(),
                     description:
-                        "Run a read-only SELECT query against the project SQLite database \
-                        (files, programs, data_items, call_edges, copybook_uses)."
+                        "Run one read-only SELECT query against the indexed project SQLite database. \
+                        Use this for project facts from files, programs, data_items, call_edges, or \
+                        copybook_uses. Do not use it for writes, DDL, or guessed values."
                             .to_string(),
                     parameters: serde_json::json!({
                         "type": "object",
-                        "properties": { "sql": { "type": "string" } },
+                        "properties": {
+                            "sql": {
+                                "type": "string",
+                                "description": "A single SQLite SELECT statement that reads indexed project data."
+                            }
+                        },
                         "required": ["sql"]
                     }),
                 },
@@ -267,10 +289,17 @@ impl AgentRouter {
                 r#type: "function".to_string(),
                 function: FunctionDefinition {
                     name: "read_file".to_string(),
-                    description: "Read the full text of a sandbox file.".to_string(),
+                    description:
+                        "Read the full text of one sandbox file. Use this when exact source content matters, and pass only a path inside the sandbox."
+                            .to_string(),
                     parameters: serde_json::json!({
                         "type": "object",
-                        "properties": { "path": { "type": "string" } },
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "Relative path to one file inside the sandbox."
+                            }
+                        },
                         "required": ["path"]
                     }),
                 },
@@ -279,12 +308,20 @@ impl AgentRouter {
                 r#type: "function".to_string(),
                 function: FunctionDefinition {
                     name: "list_directory".to_string(),
-                    description: "List entries in a sandbox directory.".to_string(),
+                    description:
+                        "List entries in one sandbox directory, optionally filtered by extension. Use this to discover candidate files before reading them."
+                            .to_string(),
                     parameters: serde_json::json!({
                         "type": "object",
                         "properties": {
-                            "path": { "type": "string" },
-                            "extension": { "type": "string" }
+                            "path": {
+                                "type": "string",
+                                "description": "Relative path to a directory inside the sandbox."
+                            },
+                            "extension": {
+                                "type": "string",
+                                "description": "Optional extension filter such as .cbl or .cpy."
+                            }
                         },
                         "required": ["path"]
                     }),
@@ -294,13 +331,20 @@ impl AgentRouter {
                 r#type: "function".to_string(),
                 function: FunctionDefinition {
                     name: "search_in_file".to_string(),
-                    description: "Search for a text pattern (case-insensitive) in a file."
-                        .to_string(),
+                    description:
+                        "Search one sandbox file for a plain-text pattern, case-insensitive, and return matching lines with line numbers."
+                            .to_string(),
                     parameters: serde_json::json!({
                         "type": "object",
                         "properties": {
-                            "path": { "type": "string" },
-                            "pattern": { "type": "string" }
+                            "path": {
+                                "type": "string",
+                                "description": "Relative path to one file inside the sandbox."
+                            },
+                            "pattern": {
+                                "type": "string",
+                                "description": "Plain-text pattern to search for."
+                            }
                         },
                         "required": ["path", "pattern"]
                     }),
@@ -322,8 +366,15 @@ impl AgentRouter {
                 let _ = tx.send("\x01STATUS:Querying project database...".to_string());
                 match MemoryStore::open_or_create(sandbox_path) {
                     Err(e) => serde_json::json!({ "error": format!("DB error: {e}") }).to_string(),
-                    Ok(store) => match store.query_readonly(sql) {
-                        Ok(val) => val.to_string(),
+                    Ok(store) => match store.project_index_is_empty() {
+                        Ok(true) => serde_json::json!({
+                            "error": "Project index is empty. Run /init before asking for indexed project data."
+                        })
+                        .to_string(),
+                        Ok(false) => match store.query_readonly(sql) {
+                            Ok(val) => val.to_string(),
+                            Err(e) => serde_json::json!({ "error": e.to_string() }).to_string(),
+                        },
                         Err(e) => serde_json::json!({ "error": e.to_string() }).to_string(),
                     },
                 }
@@ -338,10 +389,11 @@ impl AgentRouter {
                         Ok(content) => {
                             const MAX: usize = 120_000;
                             let body = if content.len() > MAX {
+                                let preview = truncate_utf8_preview(&content, MAX);
                                 format!(
                                     "[truncated: first {MAX} of {} bytes]\n{}",
                                     content.len(),
-                                    &content[..MAX]
+                                    preview
                                 )
                             } else {
                                 content
@@ -461,10 +513,100 @@ impl AgentRouter {
                 std::fs::create_dir_all(parent)
                     .map_err(|e| format!("Failed to create directories: {e}"))?;
             }
-            std::fs::write(full_path, content)
-                .map_err(|e| format!("Failed to write file: {e}"))?;
+            std::fs::write(full_path, content).map_err(|e| format!("Failed to write file: {e}"))?;
         }
         Ok(())
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::types::{FunctionCall, ToolCall};
+    use std::io::Write;
+
+    #[test]
+    fn readonly_tools_descriptions_include_usage_constraints() {
+        let tools = AgentRouter::build_readonly_tools();
+
+        let query_sqlite = tools
+            .iter()
+            .find(|t| t.function.name == "query_sqlite")
+            .unwrap();
+        assert!(query_sqlite.function.description.contains("SELECT"));
+        assert!(query_sqlite.function.description.contains("read-only"));
+
+        let read_file = tools
+            .iter()
+            .find(|t| t.function.name == "read_file")
+            .unwrap();
+        assert!(read_file.function.description.contains("sandbox"));
+        assert!(read_file.function.description.contains("full text"));
+
+        let list_directory = tools
+            .iter()
+            .find(|t| t.function.name == "list_directory")
+            .unwrap();
+        assert!(list_directory.function.description.contains("directory"));
+        assert!(list_directory.function.description.contains("extension"));
+
+        let search_in_file = tools
+            .iter()
+            .find(|t| t.function.name == "search_in_file")
+            .unwrap();
+        assert!(
+            search_in_file
+                .function
+                .description
+                .contains("case-insensitive")
+        );
+        assert!(search_in_file.function.description.contains("line"));
+    }
+
+    #[tokio::test]
+    async fn read_file_truncation_handles_utf8_boundaries_without_panicking() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("utf8.cbl");
+        let mut file = std::fs::File::create(&path).unwrap();
+        let content = format!("a{}", "你".repeat(40_100));
+        file.write_all(content.as_bytes()).unwrap();
+
+        let tc = ToolCall {
+            id: "1".to_string(),
+            r#type: "function".to_string(),
+            function: FunctionCall {
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({ "path": "utf8.cbl" }).to_string(),
+            },
+        };
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let result = AgentRouter::execute_readonly_tool(&tc, dir.path(), &tx).await;
+        assert!(result.is_ok());
+
+        let result_json = result.unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&result_json).unwrap();
+        let body = parsed["content"].as_str().unwrap_or("");
+        assert!(body.contains("[truncated:"), "tool result: {}", result_json);
+    }
+
+    #[tokio::test]
+    async fn query_sqlite_returns_init_guidance_when_index_is_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let tc = ToolCall {
+            id: "2".to_string(),
+            r#type: "function".to_string(),
+            function: FunctionCall {
+                name: "query_sqlite".to_string(),
+                arguments: serde_json::json!({ "sql": "SELECT * FROM files" }).to_string(),
+            },
+        };
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let result = AgentRouter::execute_readonly_tool(&tc, dir.path(), &tx)
+            .await
+            .unwrap();
+        assert!(result.contains("/init"));
+        assert!(result.contains("index"));
+    }
+}

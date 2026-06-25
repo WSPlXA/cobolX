@@ -133,6 +133,13 @@ impl MemoryStore {
 
         Ok(serde_json::Value::Array(result_rows))
     }
+
+    pub fn project_index_is_empty(&self) -> StoreResult<bool> {
+        let file_count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))?;
+        Ok(file_count == 0)
+    }
 }
 
 fn create_dirs(paths: &MemoryPaths) -> StoreResult<()> {

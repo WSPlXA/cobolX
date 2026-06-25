@@ -209,10 +209,11 @@ impl AgentRouter {
                 Ok((passed, feedback)) => {
                     if passed {
                         let _ = tx.send("\x01STATUS:Verify Agent: Validation passed!".to_string());
-                        
+
                         if let Ok(lock) = write_buf.lock() {
                             if let Err(e) = self.commit_write_buffer(&lock) {
-                                let _ = tx.send(format!("\x01STATUS:Failed to commit files: {}", e));
+                                let _ =
+                                    tx.send(format!("\x01STATUS:Failed to commit files: {}", e));
                             }
                         }
 
@@ -250,7 +251,7 @@ impl AgentRouter {
                 }
                 Err(e) => {
                     let _ = tx.send(format!("\x01STATUS:Verify Agent error: {}, skipping...", e));
-                    
+
                     if let Ok(lock) = write_buf.lock() {
                         if let Err(e) = self.commit_write_buffer(&lock) {
                             let _ = tx.send(format!("\x01STATUS:Failed to commit files: {}", e));
@@ -482,7 +483,8 @@ impl AgentRouter {
                     let path_str = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
                     let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
                     let _ = tx.send(format!("\x01STATUS:Writing file: {path_str}"));
-                    match self.write_file(sandbox_path, path_str, content, write_buffer.as_deref()) {
+                    match self.write_file(sandbox_path, path_str, content, write_buffer.as_deref())
+                    {
                         Ok(full_path) => serde_json::json!({
                             "ok": true,
                             "path": full_path.to_string_lossy()
