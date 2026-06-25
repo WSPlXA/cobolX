@@ -37,63 +37,11 @@ pub enum ViewMode {
     SandboxSelect,
 }
 
-pub enum TaskUpdate {
-    Routed(crate::agent::client::Route, &'static str),
-    Delta(String, &'static str),
-    Finished(Result<Option<crate::agent::client::Usage>, String>, &'static str),
-}
-
-pub struct App {
-    pub messages: Vec<Message>,
-    pub input_text: String,
-    pub dropdown_index: usize,
-    pub show_dropdown: bool,
-    pub routing_mode: RoutingMode,
-    pub router: Arc<AgentRouter>,
-    pub view_mode: ViewMode,
-    pub config_active_field: usize,
-    pub config_deepseek_input: String,
-    pub config_glm_input: String,
-    pub last_model: Option<String>,
-    pub last_prompt_tokens: u32,
-    pub last_completion_tokens: u32,
-use crate::agent::client::AgentRouter;
-use crate::ui::draw;
-use chrono::Local;
-use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-};
-use ratatui::{backend::CrosstermBackend, Terminal};
-use std::io;
-use std::sync::Arc;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Sender {
-    User,
-    Cobolx,
-}
-
-#[derive(Debug, Clone)]
-pub struct Message {
-    pub sender: Sender,
-    pub text: String,
-    pub timestamp: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RoutingMode {
-    Auto,
-    ForceLight,
-    ForceHeavy,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ViewMode {
-    Chat,
-    Config,
-    SandboxSelect,
+pub enum DropdownType {
+    None,
+    Commands,
+    Files,
 }
 
 pub enum TaskUpdate {
@@ -202,6 +150,61 @@ impl App {
             .collect()
     }
 
+    pub fn get_at_query(&self) -> Option<&str> {
+        if let Some(idx) = self.input_text.rfind('@') {
+            let suffix = &self.input_text[idx + 1..];
+            if !suffix.contains(' ') {
+                return Some(suffix);
+            }
+        }
+        None
+    }
+
+    pub fn get_filtered_files(&self) -> Vec<String> {
+        let Some(query) = self.get_at_query() else {
+            return Vec::new();
+        };
+        let query_lower = query.to_lowercase();
+        let mut list = Vec::new();
+        for entry in &self.discovered_files {
+            if let Some(file_name) = entry.path.file_name().and_then(|s| s.to_str()) {
+                let file_name_lower = file_name.to_lowercase();
+                if query_lower.is_empty() || file_name_lower.contains(&query_lower) {
+                    list.push(file_name.to_string());
+                }
+            }
+        }
+        list.sort();
+        list.dedup();
+        list
+    }
+
+    pub fn get_dropdown_type(&self) -> DropdownType {
+        if self.input_text.starts_with('/') {
+            let filtered = self.get_filtered_commands();
+            if !filtered.is_empty() {
+                return DropdownType::Commands;
+            }
+        }
+        if self.get_at_query().is_some() {
+            let filtered = self.get_filtered_files();
+            if !filtered.is_empty() {
+                return DropdownType::Files;
+            }
+        }
+        DropdownType::None
+    }
+
+    pub fn insert_selected_file(&mut self, file_name: &str) {
+        if let Some(idx) = self.input_text.rfind('@') {
+            let mut new_text = self.input_text[..idx].to_string();
+            new_text.push('@');
+            new_text.push_str(file_name);
+            new_text.push(' ');
+            self.input_text = new_text;
+        }
+    }
+
     /// Submits active input. Returns (should_exit, is_command)
     pub fn submit_message(&mut self) -> (bool, bool) {
         let text = self.input_text.trim().to_string();
@@ -292,6 +295,227 @@ impl App {
                                             timestamp: Local::now().format("%H:%M:%S").to_string(),
                                         });
                                     }
+                                }
+                                Err(e) => {
+                                    self.messages.push(Message {
+                                        sender: Sender::Cobolx,
+                                        text: format!("Error indexing sandbox: {}", e),
+                                        timestamp: Local::now().format("%H:%M:%S").to_string(),
+                                    });
+                                }
+                            }
+                        } else {
+                            self.messages.push(Message {
+                                sender: Sender::Cobolx,
+                                text: "No sandbox directory selected.".to_string(),
+                                timestamp: Local::now().format("%H:%M:%S").to_string(),
+                            });
+                        }
+                    }
+                    "model" => {
+                        if parts.len() > 1 {
+                            match parts[1].to_lowercase().as_str() {
+                                "auto" => {
+                                    self.routing_mode = RoutingMode::Auto;
+                                    self.messages.push(Message {
+                                        sender: Sender::Cobolx,
+                                        text: "Routing mode set to Auto.".to_string(),
+                                        timestamp: Local::now().format("%H:%M:%S").to_string(),
+                                    });
+                                }
+                                "light" | "lite" => {
+                                    self.routing_mode = RoutingMode::ForceLight;
+                                    self.messages.push(Message {
+                                        sender: Sender::Cobolx,
+                                        text: "Routing mode set to Force Lightweight Model (DeepSeek).".to_string(),
+                                        timestamp: Local::now().format("%H:%M:%S").to_string(),
+                                    });
+                                }
+                                "heavy" => {
+                                    self.routing_mode = RoutingMode::ForceHeavy;
+                                    self.messages.push(Message {
+                                        sender: Sender::Cobolx,
+                                        text: "Routing mode set to Force Heavy Model (GLM-4-Pro).".to_string(),
+                                        timestamp: Local::now().format("%H:%M:%S").to_string(),
+                                    });
+                                }
+                                _ => {
+                                    self.messages.push(Message {
+                                        sender: Sender::Cobolx,
+                                        text: "Invalid routing mode. Use auto, light, or heavy.".to_string(),
+                                        timestamp: Local::now().format("%H:%M:%S").to_string(),
+                                    });
+                                }
+                            }
+                        } else {
+                            let current = match self.routing_mode {
+                                RoutingMode::Auto => "Auto",
+                                RoutingMode::ForceLight => "Force Light (DeepSeek)",
+                                RoutingMode::ForceHeavy => "Force Heavy (GLM-4-Pro)",
+                            };
+                            self.messages.push(Message {
+                                sender: Sender::Cobolx,
+                                text: format!("Current routing mode: {}", current),
+                                timestamp: Local::now().format("%H:%M:%S").to_string(),
+                            });
+                        }
+                    }
+                    "config" => {
+                        self.view_mode = ViewMode::Config;
+                        self.config_active_field = 0;
+                    }
+                    "tokens" => {
+                        let current_routing = match self.routing_mode {
+                            RoutingMode::Auto => "Auto",
+                            RoutingMode::ForceLight => "Force Light (DeepSeek)",
+                            RoutingMode::ForceHeavy => "Force Heavy (GLM-4-Pro)",
+                        };
+                        let last_model_str = self.last_model.as_deref().unwrap_or("None");
+                        let stats = format!(
+                            "Token Statistics & Routing Config:\n\
+                             ---------------------------------\n\
+                             Routing Setting: {}\n\
+                             Last Active Model: {}\n\
+                             Last Turn Prompt Tokens: {}\n\
+                             Last Turn Completion Tokens: {}\n\n\
+                             Accumulated DeepSeek Prompt Tokens: {}\n\
+                             Accumulated DeepSeek Completion Tokens: {}\n\n\
+                             Accumulated GLM-4-Pro Prompt Tokens: {}\n\
+                             Accumulated GLM-4-Pro Completion Tokens: {}",
+                            current_routing,
+                            last_model_str,
+                            self.last_prompt_tokens,
+                            self.last_completion_tokens,
+                            self.deepseek_prompt_tokens,
+                            self.deepseek_completion_tokens,
+                            self.glm_prompt_tokens,
+                            self.glm_completion_tokens
+                        );
+                        self.messages.push(Message {
+                            sender: Sender::Cobolx,
+                            text: stats,
+                            timestamp: Local::now().format("%H:%M:%S").to_string(),
+                        });
+                    }
+                    _ => {
+                        self.messages.push(Message {
+                            sender: Sender::Cobolx,
+                            text: format!("Unknown command: /{}", cmd),
+                            timestamp: Local::now().format("%H:%M:%S").to_string(),
+                        });
+                    }
+                }
+            }
+        }
+
+        self.input_text.clear();
+        (should_exit, is_command)
+    }
+}
+
+fn trigger_chat_task(app: &mut App, tx: &tokio::sync::mpsc::UnboundedSender<TaskUpdate>) -> bool {
+    let (should_exit, is_command) = app.submit_message();
+    if should_exit {
+        return true;
+    }
+    if is_command {
+        return false;
+    }
+
+    // Trigger LLM request
+    let router = Arc::clone(&app.router);
+    let history = app.messages.clone();
+    let routing_mode = app.routing_mode;
+    let sandbox_path = app.sandbox_path.clone();
+    let tx = tx.clone();
+
+    // Add a placeholder message for the incoming streaming response
+    app.messages.push(Message {
+        sender: Sender::Cobolx,
+        text: "Thinking...".to_string(),
+        timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
+    });
+
+    app.active_agent = Some("Router Sub-Agent".to_string());
+
+    tokio::spawn(async move {
+        // 1. Classify route
+        let route = match routing_mode {
+            RoutingMode::ForceLight => crate::agent::client::Route::Light,
+            RoutingMode::ForceHeavy => crate::agent::client::Route::Heavy,
+            RoutingMode::Auto => {
+                let query = history.last().map(|m| m.text.as_str()).unwrap_or("");
+                router.classify_route(query).await
+            }
+        };
+
+        let route_name = match route {
+            crate::agent::client::Route::Light => "Lightweight Model (DeepSeek)",
+            crate::agent::client::Route::Heavy => "Heavy Model (GLM-4-Pro)",
+            crate::agent::client::Route::Database => "Database Sub-Agent",
+        };
+
+        let _ = tx.send(TaskUpdate::Routed(route, route_name));
+
+        // 2. Execute chat stream
+        let (stream_tx, mut stream_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        
+        let tx_clone = tx.clone();
+        let stream_handle = tokio::spawn(async move {
+            while let Some(delta) = stream_rx.recv().await {
+                let _ = tx_clone.send(TaskUpdate::Delta(delta, route_name));
+            }
+        });
+
+        let res = router.execute_chat_stream(
+            &history,
+            route,
+            sandbox_path.as_deref(),
+            stream_tx,
+        ).await;
+
+        let _ = stream_handle.await;
+
+        match res {
+            Ok((usage, final_model)) => {
+                let _ = tx.send(TaskUpdate::Finished(Ok(usage), final_model));
+            }
+            Err(e) => {
+                let _ = tx.send(TaskUpdate::Finished(Err(e), route_name));
+            }
+        }
+    });
+
+    false
+}
+
+pub fn run_tui() -> Result<(), io::Error> {
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    let mut app = App::new();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<TaskUpdate>();
+
+    loop {
+        // Check for updates
+        while let Ok(update) = rx.try_recv() {
+            match update {
+                TaskUpdate::Routed(_route, model_used) => {
+                    app.active_agent = Some(model_used.to_string());
+                    if let Some(msg) = app.messages.iter_mut().last() {
+                        if msg.text == "Thinking..." {
+                            msg.text = format!("(Routed: {})\nThinking...", model_used);
+                        }
+                    }
+                }
+                TaskUpdate::Delta(delta, model_used) => {
+                    app.active_agent = Some(model_used.to_string());
+                    if let Some(msg) = app.messages.iter_mut().last() {
+                        if msg.text == "Thinking..." || (msg.text.starts_with("(Routed:") && msg.text.contains("Thinking...")) {
+                            msg.text = format!("(Using {}) {}", model_used, delta);
                         } else {
                             msg.text.push_str(&delta);
                         }
@@ -332,13 +556,13 @@ impl App {
             }
         }
 
-        terminal.draw(|f| draw::draw(f, app))?;
+        terminal.draw(|f| draw::draw(f, &mut app))?;
 
         // Non-blocking poll for crossterm events
         if event::poll(std::time::Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
                 if key.code == KeyCode::Char('c') && key.modifiers.contains(event::KeyModifiers::CONTROL) {
-                    return Ok(());
+                    break;
                 }
 
                 if app.view_mode == ViewMode::Config {
@@ -446,52 +670,81 @@ impl App {
                         _ => {}
                     }
                 } else {
-                    let filtered = app.get_filtered_commands();
-                    let has_options = !filtered.is_empty();
+                    let dropdown_type = app.get_dropdown_type();
+                    let has_options = dropdown_type != DropdownType::None;
 
                     match key.code {
                         KeyCode::Esc => {
                             if app.show_dropdown {
                                 app.show_dropdown = false;
                             } else if app.input_text.is_empty() {
-                                return Ok(());
+                                break;
                             } else {
                                 app.input_text.clear();
                             }
                         }
                         KeyCode::Down | KeyCode::Tab => {
                             if app.show_dropdown && has_options {
-                                app.dropdown_index = (app.dropdown_index + 1) % filtered.len();
+                                let len = match dropdown_type {
+                                    DropdownType::Commands => app.get_filtered_commands().len(),
+                                    DropdownType::Files => app.get_filtered_files().len(),
+                                    _ => 0,
+                                };
+                                if len > 0 {
+                                    app.dropdown_index = (app.dropdown_index + 1) % len;
+                                }
                             }
                         }
                         KeyCode::Up => {
                             if app.show_dropdown && has_options {
-                                app.dropdown_index = (app.dropdown_index + filtered.len() - 1) % filtered.len();
+                                let len = match dropdown_type {
+                                    DropdownType::Commands => app.get_filtered_commands().len(),
+                                    DropdownType::Files => app.get_filtered_files().len(),
+                                    _ => 0,
+                                };
+                                if len > 0 {
+                                    app.dropdown_index = (app.dropdown_index + len - 1) % len;
+                                }
                             }
                         }
                         KeyCode::Enter => {
                             if app.show_dropdown && has_options {
-                                app.input_text = filtered[app.dropdown_index].clone();
-                                app.show_dropdown = false;
-                                if trigger_chat_task(app, tx) {
-                                    return Ok(());
+                                match dropdown_type {
+                                    DropdownType::Commands => {
+                                        let filtered = app.get_filtered_commands();
+                                        app.input_text = filtered[app.dropdown_index].clone();
+                                        app.show_dropdown = false;
+                                        if trigger_chat_task(&mut app, &tx) {
+                                            break;
+                                        }
+                                    }
+                                    DropdownType::Files => {
+                                        let filtered = app.get_filtered_files();
+                                        app.insert_selected_file(&filtered[app.dropdown_index]);
+                                        app.show_dropdown = false;
+                                    }
+                                    _ => {}
                                 }
                             } else {
-                                if trigger_chat_task(app, tx) {
-                                    return Ok(());
+                                if trigger_chat_task(&mut app, &tx) {
+                                    break;
                                 }
                             }
                         }
                         KeyCode::Char(c) => {
                             app.input_text.push(c);
-                            if app.input_text.starts_with('/') {
+                            let new_type = app.get_dropdown_type();
+                            if new_type != DropdownType::None {
                                 app.show_dropdown = true;
                                 app.dropdown_index = 0;
+                            } else {
+                                app.show_dropdown = false;
                             }
                         }
                         KeyCode::Backspace => {
                             app.input_text.pop();
-                            if app.input_text.starts_with('/') {
+                            let new_type = app.get_dropdown_type();
+                            if new_type != DropdownType::None {
                                 app.show_dropdown = true;
                                 app.dropdown_index = 0;
                             } else {
@@ -504,4 +757,14 @@ impl App {
             }
         }
     }
+
+    disable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
+    terminal.show_cursor()?;
+
+    Ok(())
 }

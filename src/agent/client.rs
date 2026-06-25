@@ -1,5 +1,6 @@
 use crate::ui::tui::Message;
 use crate::config::ConfigManager;
+use crate::memory::MemoryStore;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -122,6 +123,7 @@ struct ChatResponse {
 pub enum Route {
     Light,
     Heavy,
+    Database,
 }
 
 pub struct DeepSeekClient {

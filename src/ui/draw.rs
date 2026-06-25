@@ -315,54 +315,83 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     f.render_widget(help_block, chunks[3]);
 
     // 5. Autocomplete Dropdown popup (renders overlay above input prompt)
-    let filtered = app.get_filtered_commands();
-    if app.show_dropdown && !filtered.is_empty() {
-        let popup_height = (filtered.len() + 2) as u16;
-        let popup_width = 45;
-        let popup_rect = Rect {
-            x: chunks[2].x + 2,
-            y: chunks[2].y.saturating_sub(popup_height),
-            width: popup_width.min(chunks[2].width - 4),
-            height: popup_height,
+    let dropdown_type = app.get_dropdown_type();
+    if app.show_dropdown && dropdown_type != crate::ui::tui::DropdownType::None {
+        let (items, title) = match dropdown_type {
+            crate::ui::tui::DropdownType::Commands => {
+                let filtered = app.get_filtered_commands();
+                let list_items: Vec<ListItem> = filtered
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, cmd)| {
+                        let style = if idx == app.dropdown_index {
+                            Style::default().fg(Color::Black).bg(Color::Green)
+                        } else {
+                            Style::default().fg(Color::Green)
+                        };
+
+                        let desc = match cmd.as_str() {
+                            "/help" => "  Show help list",
+                            "/clear" => " Clear console history",
+                            "/about" => " About COBOLX",
+                            "/model" => " Model routing override",
+                            "/config" => " Open API configuration",
+                            "/tokens" => " Show token consumption statistics",
+                            "/init" => "   Scan sandbox directory for COBOL",
+                            "/exit" => "  Exit TUI",
+                            _ => "",
+                        };
+
+                        ListItem::new(Line::from(vec![
+                            Span::styled(format!("{:<8}", cmd), style.add_modifier(Modifier::BOLD)),
+                            Span::styled(desc, Style::default().fg(Color::DarkGray)),
+                        ]))
+                    })
+                    .collect();
+                (list_items, " Commands ")
+            }
+            crate::ui::tui::DropdownType::Files => {
+                let filtered = app.get_filtered_files();
+                let list_items: Vec<ListItem> = filtered
+                    .iter()
+                    .enumerate()
+                    .take(10)
+                    .map(|(idx, file)| {
+                        let style = if idx == app.dropdown_index {
+                            Style::default().fg(Color::Black).bg(Color::Green)
+                        } else {
+                            Style::default().fg(Color::Green)
+                        };
+
+                        ListItem::new(Line::from(vec![
+                            Span::styled(file.clone(), style),
+                        ]))
+                    })
+                    .collect();
+                (list_items, " Files ")
+            }
+            _ => (Vec::new(), ""),
         };
 
-        f.render_widget(Clear, popup_rect); // Hides background conversation lines
+        if !items.is_empty() {
+            let popup_height = (items.len() + 2) as u16;
+            let popup_width = 45;
+            let popup_rect = Rect {
+                x: chunks[2].x + 2,
+                y: chunks[2].y.saturating_sub(popup_height),
+                width: popup_width.min(chunks[2].width - 4),
+                height: popup_height,
+            };
 
-        let items: Vec<ListItem> = filtered
-            .iter()
-            .enumerate()
-            .map(|(idx, cmd)| {
-                let style = if idx == app.dropdown_index {
-                    Style::default().fg(Color::Black).bg(Color::Green)
-                } else {
-                    Style::default().fg(Color::Green)
-                };
+            f.render_widget(Clear, popup_rect);
 
-                let desc = match cmd.as_str() {
-                    "/help" => "  Show help list",
-                    "/clear" => " Clear console history",
-                    "/about" => " About COBOLX",
-                    "/model" => " Model routing override",
-                    "/config" => " Open API configuration",
-                    "/tokens" => " Show token consumption statistics",
-                    "/init" => "   Scan sandbox directory for COBOL",
-                    "/exit" => "  Exit TUI",
-                    _ => "",
-                };
-
-                ListItem::new(Line::from(vec![
-                    Span::styled(format!("{:<8}", cmd), style.add_modifier(Modifier::BOLD)),
-                    Span::styled(desc, Style::default().fg(Color::DarkGray)),
-                ]))
-            })
-            .collect();
-
-        let list = List::new(items).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Commands ")
-                .border_style(Style::default().fg(Color::Green)),
-        );
-        f.render_widget(list, popup_rect);
+            let list = List::new(items).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(title)
+                    .border_style(Style::default().fg(Color::Green)),
+            );
+            f.render_widget(list, popup_rect);
+        }
     }
 }
