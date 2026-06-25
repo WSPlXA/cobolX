@@ -245,6 +245,104 @@ fn migrate_schema(conn: &Connection) -> rusqlite::Result<()> {
         CREATE INDEX IF NOT EXISTS idx_data_items_source_file ON data_items(source_file_id);
         CREATE INDEX IF NOT EXISTS idx_data_items_name ON data_items(name);
 
+        CREATE TABLE IF NOT EXISTS program_features (
+            program_id INTEGER PRIMARY KEY,
+            source_file_id INTEGER NOT NULL,
+            incoming_call_count INTEGER NOT NULL DEFAULT 0,
+            outgoing_call_count INTEGER NOT NULL DEFAULT 0,
+            static_call_count INTEGER NOT NULL DEFAULT 0,
+            dynamic_call_count INTEGER NOT NULL DEFAULT 0,
+            copybook_use_count INTEGER NOT NULL DEFAULT 0,
+            distinct_copybook_count INTEGER NOT NULL DEFAULT 0,
+            referenced_by_file_count INTEGER NOT NULL DEFAULT 0,
+            is_entrypoint INTEGER NOT NULL DEFAULT 0,
+            has_heavy_copy_usage INTEGER NOT NULL DEFAULT 0,
+            data_item_count INTEGER NOT NULL DEFAULT 0,
+            paragraph_count INTEGER NOT NULL DEFAULT 0,
+            external_op_count INTEGER NOT NULL DEFAULT 0,
+            identifier_count INTEGER NOT NULL DEFAULT 0,
+            literal_count INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY(program_id) REFERENCES programs(id) ON DELETE CASCADE,
+            FOREIGN KEY(source_file_id) REFERENCES files(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS code_blocks (
+            id INTEGER PRIMARY KEY,
+            program_id INTEGER NOT NULL,
+            source_file_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            parent_section TEXT,
+            sequence_no INTEGER NOT NULL,
+            statement_count INTEGER NOT NULL DEFAULT 0,
+            start_offset INTEGER NOT NULL,
+            byte_len INTEGER NOT NULL,
+            FOREIGN KEY(program_id) REFERENCES programs(id) ON DELETE CASCADE,
+            FOREIGN KEY(source_file_id) REFERENCES files(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_code_blocks_program ON code_blocks(program_id);
+        CREATE INDEX IF NOT EXISTS idx_code_blocks_kind ON code_blocks(kind);
+
+        CREATE TABLE IF NOT EXISTS external_ops (
+            id INTEGER PRIMARY KEY,
+            program_id INTEGER NOT NULL,
+            source_file_id INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            verb TEXT NOT NULL,
+            target TEXT,
+            start_offset INTEGER NOT NULL,
+            byte_len INTEGER NOT NULL,
+            FOREIGN KEY(program_id) REFERENCES programs(id) ON DELETE CASCADE,
+            FOREIGN KEY(source_file_id) REFERENCES files(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_external_ops_program ON external_ops(program_id);
+        CREATE INDEX IF NOT EXISTS idx_external_ops_kind ON external_ops(kind);
+        CREATE INDEX IF NOT EXISTS idx_external_ops_target ON external_ops(target);
+
+        CREATE TABLE IF NOT EXISTS identifiers (
+            id INTEGER PRIMARY KEY,
+            program_id INTEGER NOT NULL,
+            source_file_id INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            value TEXT NOT NULL,
+            occurrences INTEGER NOT NULL DEFAULT 1,
+            first_offset INTEGER NOT NULL,
+            FOREIGN KEY(program_id) REFERENCES programs(id) ON DELETE CASCADE,
+            FOREIGN KEY(source_file_id) REFERENCES files(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_identifiers_program ON identifiers(program_id);
+        CREATE INDEX IF NOT EXISTS idx_identifiers_kind_value ON identifiers(kind, value);
+
+        CREATE TABLE IF NOT EXISTS literals (
+            id INTEGER PRIMARY KEY,
+            program_id INTEGER NOT NULL,
+            source_file_id INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            value TEXT NOT NULL,
+            occurrences INTEGER NOT NULL DEFAULT 1,
+            first_offset INTEGER NOT NULL,
+            FOREIGN KEY(program_id) REFERENCES programs(id) ON DELETE CASCADE,
+            FOREIGN KEY(source_file_id) REFERENCES files(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_literals_program ON literals(program_id);
+        CREATE INDEX IF NOT EXISTS idx_literals_kind_value ON literals(kind, value);
+
+        CREATE TABLE IF NOT EXISTS copybook_features (
+            copybook_file_id INTEGER PRIMARY KEY,
+            copybook_name TEXT NOT NULL,
+            used_by_program_count INTEGER NOT NULL DEFAULT 0,
+            used_by_file_count INTEGER NOT NULL DEFAULT 0,
+            replacing_use_count INTEGER NOT NULL DEFAULT 0,
+            data_item_count INTEGER NOT NULL DEFAULT 0,
+            contains_header_fields INTEGER NOT NULL DEFAULT 0,
+            contains_error_fields INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY(copybook_file_id) REFERENCES files(id) ON DELETE CASCADE
+        );
+
         CREATE TABLE IF NOT EXISTS runs (
             id TEXT PRIMARY KEY,
             started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,

@@ -136,7 +136,9 @@ impl AgentRouter {
                     \n\
                     WORKFLOW:\n\
                     1. query_sqlite: SELECT id, path, kind FROM files\n\
-                    2. query_sqlite: get programs, data_items, call_edges, copybook_uses\n\
+                    2. query_sqlite: get programs, data_items, call_edges, copybook_uses, \
+                       program_features, code_blocks, external_ops, identifiers, literals, \
+                       copybook_features\n\
                     3. read_file: raw source text only when needed\n\
                     4. list_directory / search_in_file: locate files if needed\n\
                     \n\
@@ -149,7 +151,13 @@ impl AgentRouter {
                     2. programs(id, name, file_id)\n\
                     3. copybook_uses(id, from_file_id, copybook_name, resolve_status)\n\
                     4. call_edges(id, caller_program_id, callee_name, kind)\n\
-                    5. data_items(id, program_id, name, level, parent_name, pic, usage_clause, section)"
+                    5. data_items(id, program_id, name, level, parent_name, pic, usage_clause, section)\n\
+                    6. program_features(program_id, incoming_call_count, outgoing_call_count, is_entrypoint, paragraph_count, external_op_count)\n\
+                    7. code_blocks(program_id, name, kind, parent_section, sequence_no, statement_count)\n\
+                    8. external_ops(program_id, kind, verb, target)\n\
+                    9. identifiers(program_id, kind, value, occurrences)\n\
+                    10. literals(program_id, kind, value, occurrences)\n\
+                    11. copybook_features(copybook_file_id, copybook_name, used_by_program_count, contains_header_fields, contains_error_fields)"
                 ));
             }
         }
@@ -270,8 +278,10 @@ impl AgentRouter {
                     name: "query_sqlite".to_string(),
                     description:
                         "Run one read-only SELECT query against the indexed project SQLite database. \
-                        Use this for project facts from files, programs, data_items, call_edges, or \
-                        copybook_uses. Do not use it for writes, DDL, or guessed values."
+                        Use this for project facts from files, programs, data_items, call_edges, \
+                        copybook_uses, program_features, code_blocks, external_ops, identifiers, \
+                        literals, or copybook_features. Do not use it for writes, DDL, or guessed \
+                        values."
                             .to_string(),
                     parameters: serde_json::json!({
                         "type": "object",

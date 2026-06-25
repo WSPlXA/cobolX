@@ -15,6 +15,42 @@ impl CallKind {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodeBlockKind {
+    Section,
+    Paragraph,
+}
+
+impl CodeBlockKind {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            CodeBlockKind::Section => "section",
+            CodeBlockKind::Paragraph => "paragraph",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExternalOpKind {
+    ExecSql,
+    ExecCics,
+    FileIo,
+    CallLiteral,
+    CallIdentifier,
+}
+
+impl ExternalOpKind {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            ExternalOpKind::ExecSql => "exec_sql",
+            ExternalOpKind::ExecCics => "exec_cics",
+            ExternalOpKind::FileIo => "file_io",
+            ExternalOpKind::CallLiteral => "call_literal",
+            ExternalOpKind::CallIdentifier => "call_identifier",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CallSummary {
     pub target: String,
@@ -138,6 +174,7 @@ pub(crate) struct ParsedProgram {
 
 #[derive(Debug)]
 pub(crate) struct ParsedCopy {
+    pub(crate) caller_name: Option<String>,
     pub(crate) name: String,
     pub(crate) start_offset: usize,
     pub(crate) byte_len: usize,
@@ -152,6 +189,43 @@ pub(crate) struct ParsedCall {
     pub(crate) start_offset: usize,
     pub(crate) byte_len: usize,
     pub(crate) using_count: usize,
+}
+
+#[derive(Debug)]
+pub(crate) struct ParsedCodeBlock {
+    pub(crate) caller_name: Option<String>,
+    pub(crate) name: String,
+    pub(crate) kind: CodeBlockKind,
+    pub(crate) parent_section: Option<String>,
+    pub(crate) start_offset: usize,
+    pub(crate) byte_len: usize,
+    pub(crate) statement_count: usize,
+}
+
+#[derive(Debug)]
+pub(crate) struct ParsedExternalOp {
+    pub(crate) caller_name: Option<String>,
+    pub(crate) kind: ExternalOpKind,
+    pub(crate) verb: String,
+    pub(crate) target: Option<String>,
+    pub(crate) start_offset: usize,
+    pub(crate) byte_len: usize,
+}
+
+#[derive(Debug)]
+pub(crate) struct ParsedIdentifier {
+    pub(crate) caller_name: Option<String>,
+    pub(crate) kind: String,
+    pub(crate) value: String,
+    pub(crate) start_offset: usize,
+}
+
+#[derive(Debug)]
+pub(crate) struct ParsedLiteral {
+    pub(crate) caller_name: Option<String>,
+    pub(crate) kind: String,
+    pub(crate) value: String,
+    pub(crate) start_offset: usize,
 }
 
 #[derive(Debug)]
@@ -179,6 +253,10 @@ pub(crate) struct ParsedFile {
     pub(crate) programs: Vec<ParsedProgram>,
     pub(crate) copies: Vec<ParsedCopy>,
     pub(crate) calls: Vec<ParsedCall>,
+    pub(crate) code_blocks: Vec<ParsedCodeBlock>,
+    pub(crate) external_ops: Vec<ParsedExternalOp>,
+    pub(crate) identifiers: Vec<ParsedIdentifier>,
+    pub(crate) literals: Vec<ParsedLiteral>,
 }
 
 #[derive(Debug)]

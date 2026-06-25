@@ -11,7 +11,7 @@ fn build_database_query_tool() -> Tool {
         r#type: "function".to_string(),
         function: FunctionDefinition {
             name: "query_sqlite".to_string(),
-            description: "Run one read-only SELECT query against the indexed project SQLite database. Use this for project facts from files, programs, data_items, call_edges, copybook_uses, and other indexed COBOL metadata. Do not use it for writes, DDL, or guesses."
+            description: "Run one read-only SELECT query against the indexed project SQLite database. Use this for project facts from files, programs, data_items, call_edges, copybook_uses, program_features, code_blocks, external_ops, identifiers, literals, copybook_features, and other indexed COBOL metadata. Do not use it for writes, DDL, or guesses."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -68,7 +68,24 @@ impl AgentRouter {
                          kind 'static'|'dynamic', using_count)\n\
                     5. `data_items` (id, program_id, source_file_id, name, level, parent_name, \
                          pic, usage_clause, occurs, redefines, section, byte_offset, byte_size, \
-                         storage_kind, layout_status, start_offset, byte_len)\n\n\
+                         storage_kind, layout_status, start_offset, byte_len)\n\
+                    6. `program_features` (program_id, source_file_id, incoming_call_count, \
+                         outgoing_call_count, static_call_count, dynamic_call_count, \
+                         copybook_use_count, distinct_copybook_count, referenced_by_file_count, \
+                         is_entrypoint, has_heavy_copy_usage, data_item_count, paragraph_count, \
+                         external_op_count, identifier_count, literal_count)\n\
+                    7. `code_blocks` (id, program_id, source_file_id, name, kind \
+                         'section'|'paragraph', parent_section, sequence_no, statement_count, \
+                         start_offset, byte_len)\n\
+                    8. `external_ops` (id, program_id, source_file_id, kind, verb, target, \
+                         start_offset, byte_len)\n\
+                    9. `identifiers` (id, program_id, source_file_id, kind, value, occurrences, \
+                         first_offset)\n\
+                    10. `literals` (id, program_id, source_file_id, kind, value, occurrences, \
+                         first_offset)\n\
+                    11. `copybook_features` (copybook_file_id, copybook_name, \
+                         used_by_program_count, used_by_file_count, replacing_use_count, \
+                         data_item_count, contains_header_fields, contains_error_fields)\n\n\
                     GUIDELINES:\n\
                     - Write standard SELECT queries only (read-only).\n\
                     - If unsure about columns, query the schema first.\n\
@@ -229,7 +246,9 @@ mod tests {
         assert!(
             tool.function
                 .description
-                .contains("files, programs, data_items, call_edges, copybook_uses")
+                .contains(
+                    "files, programs, data_items, call_edges, copybook_uses, program_features"
+                )
         );
     }
 }
