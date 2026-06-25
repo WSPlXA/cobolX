@@ -60,6 +60,7 @@ struct ChatRequest {
 }
 
 #[derive(Deserialize, Debug)]
+#[allow(dead_code)]
 struct ChatResponseChoiceMessage {
     #[serde(default)]
     content: Option<String>,
@@ -486,7 +487,7 @@ impl AgentRouter {
 
     /// Dispatches prompt with dialog history memory to the selected sub-agent
     #[allow(dead_code)]
-    pub async fn execute_chat(&self, history: &[Message], route: Route, sandbox_path: Option<&Path>) -> Result<(String, &'static str), String> {
+    pub async fn execute_chat(&self, history: &[Message], route: Route, _sandbox_path: Option<&Path>) -> Result<(String, &'static str), String> {
         let mut messages = Vec::new();
         
         // System prompt defining COBOLX identity
