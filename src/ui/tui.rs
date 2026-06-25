@@ -210,9 +210,14 @@ impl App {
                                 timestamp: Local::now().format("%H:%M:%S").to_string(),
                             });
 
-                            match crate::cobol::scanner::scan_sandbox(path) {
-                                Ok(entries) => {
-                                    self.discovered_files = entries;
+                            match crate::memory::MemoryStore::open_or_create(path)
+                                .and_then(|mut store| {
+                                    crate::cobol::indexer::index_sandbox(path, &mut store)
+                                        .map(|report| (report, store.db_path().to_path_buf()))
+                                })
+                            {
+                                Ok((report, db_path)) => {
+                                    self.discovered_files = report.files.clone();
                                     if self.discovered_files.is_empty() {
                                         self.messages.push(Message {
                                             sender: Sender::Cobolx,
@@ -220,37 +225,9 @@ impl App {
                                             timestamp: Local::now().format("%H:%M:%S").to_string(),
                                         });
                                     } else {
-                                        use crate::cobol::scanner::CobolFileType;
-                                        let sources: Vec<_> = self.discovered_files.iter()
-                                            .filter(|f| f.file_type == CobolFileType::Source)
-                                            .collect();
-                                        let copybooks: Vec<_> = self.discovered_files.iter()
-                                            .filter(|f| f.file_type == CobolFileType::Copybook)
-                                            .collect();
-
-                                        let mut report = format!(
-                                            "Found {} COBOL file(s): {} source(s), {} copybook(s)\n",
-                                            self.discovered_files.len(),
-                                            sources.len(),
-                                            copybooks.len(),
-                                        );
-
-                                        if !sources.is_empty() {
-                                            report.push_str("\n  Sources:");
-                                            for f in &sources {
-                                                report.push_str(&format!("\n    - {} ({} bytes)", f.path.to_string_lossy(), f.size_bytes));
-                                            }
-                                        }
-                                        if !copybooks.is_empty() {
-                                            report.push_str("\n  Copybooks:");
-                                            for f in &copybooks {
-                                                report.push_str(&format!("\n    - {} ({} bytes)", f.path.to_string_lossy(), f.size_bytes));
-                                            }
-                                        }
-
                                         self.messages.push(Message {
                                             sender: Sender::Cobolx,
-                                            text: report,
+                                            text: report.to_message(&db_path),
                                             timestamp: Local::now().format("%H:%M:%S").to_string(),
                                         });
                                     }

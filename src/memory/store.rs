@@ -67,6 +67,10 @@ impl MemoryStore {
     pub fn connection(&self) -> &Connection {
         &self.conn
     }
+
+    pub fn connection_mut(&mut self) -> &mut Connection {
+        &mut self.conn
+    }
 }
 
 fn create_dirs(paths: &MemoryPaths) -> StoreResult<()> {
@@ -122,6 +126,8 @@ fn migrate_schema(conn: &Connection) -> rusqlite::Result<()> {
             start_offset INTEGER NOT NULL,
             byte_len INTEGER NOT NULL,
             resolved_file_id INTEGER,
+            resolve_status TEXT NOT NULL DEFAULT 'unknown',
+            replacing_text TEXT,
             FOREIGN KEY(from_file_id) REFERENCES files(id) ON DELETE CASCADE,
             FOREIGN KEY(resolved_file_id) REFERENCES files(id) ON DELETE SET NULL
         );
@@ -135,6 +141,8 @@ fn migrate_schema(conn: &Connection) -> rusqlite::Result<()> {
             callee_name TEXT NOT NULL,
             start_offset INTEGER NOT NULL,
             byte_len INTEGER NOT NULL,
+            kind TEXT NOT NULL DEFAULT 'static',
+            using_count INTEGER NOT NULL DEFAULT 0,
             FOREIGN KEY(caller_program_id) REFERENCES programs(id) ON DELETE CASCADE
         );
 
@@ -144,16 +152,27 @@ fn migrate_schema(conn: &Connection) -> rusqlite::Result<()> {
         CREATE TABLE IF NOT EXISTS data_items (
             id INTEGER PRIMARY KEY,
             program_id INTEGER NOT NULL,
+            source_file_id INTEGER,
             name TEXT NOT NULL,
             level INTEGER NOT NULL,
+            parent_name TEXT,
             pic TEXT,
             usage_clause TEXT,
+            occurs INTEGER,
+            redefines TEXT,
+            section TEXT,
+            byte_offset INTEGER,
+            byte_size INTEGER,
+            storage_kind TEXT,
+            layout_status TEXT,
             start_offset INTEGER NOT NULL,
             byte_len INTEGER NOT NULL,
-            FOREIGN KEY(program_id) REFERENCES programs(id) ON DELETE CASCADE
+            FOREIGN KEY(program_id) REFERENCES programs(id) ON DELETE CASCADE,
+            FOREIGN KEY(source_file_id) REFERENCES files(id) ON DELETE SET NULL
         );
 
         CREATE INDEX IF NOT EXISTS idx_data_items_program ON data_items(program_id);
+        CREATE INDEX IF NOT EXISTS idx_data_items_source_file ON data_items(source_file_id);
         CREATE INDEX IF NOT EXISTS idx_data_items_name ON data_items(name);
 
         CREATE TABLE IF NOT EXISTS runs (
@@ -184,5 +203,105 @@ fn migrate_schema(conn: &Connection) -> rusqlite::Result<()> {
 
         INSERT OR IGNORE INTO schema_migrations(version) VALUES (1);
         "#,
-    )
+    )?;
+
+    ensure_column(
+        conn,
+        "copybook_uses",
+        "resolve_status",
+        "ALTER TABLE copybook_uses ADD COLUMN resolve_status TEXT NOT NULL DEFAULT 'unknown'",
+    )?;
+    ensure_column(
+        conn,
+        "copybook_uses",
+        "replacing_text",
+        "ALTER TABLE copybook_uses ADD COLUMN replacing_text TEXT",
+    )?;
+    ensure_column(
+        conn,
+        "call_edges",
+        "kind",
+        "ALTER TABLE call_edges ADD COLUMN kind TEXT NOT NULL DEFAULT 'static'",
+    )?;
+    ensure_column(
+        conn,
+        "call_edges",
+        "using_count",
+        "ALTER TABLE call_edges ADD COLUMN using_count INTEGER NOT NULL DEFAULT 0",
+    )?;
+    ensure_column(
+        conn,
+        "data_items",
+        "source_file_id",
+        "ALTER TABLE data_items ADD COLUMN source_file_id INTEGER",
+    )?;
+    ensure_column(
+        conn,
+        "data_items",
+        "parent_name",
+        "ALTER TABLE data_items ADD COLUMN parent_name TEXT",
+    )?;
+    ensure_column(
+        conn,
+        "data_items",
+        "occurs",
+        "ALTER TABLE data_items ADD COLUMN occurs INTEGER",
+    )?;
+    ensure_column(
+        conn,
+        "data_items",
+        "redefines",
+        "ALTER TABLE data_items ADD COLUMN redefines TEXT",
+    )?;
+    ensure_column(
+        conn,
+        "data_items",
+        "section",
+        "ALTER TABLE data_items ADD COLUMN section TEXT",
+    )?;
+    ensure_column(
+        conn,
+        "data_items",
+        "byte_offset",
+        "ALTER TABLE data_items ADD COLUMN byte_offset INTEGER",
+    )?;
+    ensure_column(
+        conn,
+        "data_items",
+        "byte_size",
+        "ALTER TABLE data_items ADD COLUMN byte_size INTEGER",
+    )?;
+    ensure_column(
+        conn,
+        "data_items",
+        "storage_kind",
+        "ALTER TABLE data_items ADD COLUMN storage_kind TEXT",
+    )?;
+    ensure_column(
+        conn,
+        "data_items",
+        "layout_status",
+        "ALTER TABLE data_items ADD COLUMN layout_status TEXT",
+    )?;
+
+    Ok(())
+}
+
+fn ensure_column(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    alter_sql: &str,
+) -> rusqlite::Result<()> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({})", table))?;
+    let mut rows = stmt.query([])?;
+
+    while let Some(row) = rows.next()? {
+        let name: String = row.get(1)?;
+        if name == column {
+            return Ok(());
+        }
+    }
+
+    conn.execute_batch(alter_sql)
 }
