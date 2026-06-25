@@ -79,6 +79,7 @@ pub struct App {
     pub agent_status: Option<String>,
     pub spinner_tick: usize,
     pub console_scroll_offset: u16,
+    pub custom_prompt_override: Option<String>,
 }
 
 impl App {
@@ -140,6 +141,7 @@ impl App {
             agent_status: None,
             spinner_tick: 0,
             console_scroll_offset: 0,
+            custom_prompt_override: None,
         }
     }
 
@@ -453,25 +455,23 @@ impl App {
                                                 == crate::cobol::scanner::CobolFileType::Copybook
                                         })
                                         .count();
-                                    if let Some(last) = self.messages.last_mut() {
-                                        last.text = format!(
-                                            "Generate Markdown documentation for all COBOL source files in this project \
-                                            ({source_count} source file(s), {copy_count} copybook(s)).\n\n\
-                                            STEP 1 — query_sqlite: SELECT id, path FROM files WHERE kind='source' ORDER BY path\n\n\
-                                            STEP 2 — For EACH file row (using its id and path):\n\
-                                              a) query_sqlite: SELECT id, name FROM programs WHERE file_id=<id>\n\
-                                              b) query_sqlite: SELECT name, level, pic, usage_clause, section \
-                                                 FROM data_items WHERE source_file_id=<id> LIMIT 100\n\
-                                              c) query_sqlite: SELECT callee_name, kind FROM call_edges \
-                                                 WHERE caller_program_id IN (SELECT id FROM programs WHERE file_id=<id>)\n\
-                                              d) query_sqlite: SELECT copybook_name, resolve_status \
-                                                 FROM copybook_uses WHERE from_file_id=<id>\n\
-                                              e) read_file: <path>  (read the actual source text)\n\
-                                              f) write_file: docs/<basename>.md  (Markdown document)\n\n\
-                                              STEP 3 — write_file: docs/README.md  (index listing all programs with links)\n\
-                                            Use relative paths for all write_file calls (e.g. docs/MAIN.md)."
-                                        );
-                                    }
+                                    self.custom_prompt_override = Some(format!(
+                                        "Generate Markdown documentation for all COBOL source files in this project \
+                                        ({source_count} source file(s), {copy_count} copybook(s)).\n\n\
+                                        STEP 1 — query_sqlite: SELECT id, path FROM files WHERE kind='source' ORDER BY path\n\n\
+                                        STEP 2 — For EACH file row (using its id and path):\n\
+                                          a) query_sqlite: SELECT id, name FROM programs WHERE file_id=<id>\n\
+                                          b) query_sqlite: SELECT name, level, pic, usage_clause, section \
+                                             FROM data_items WHERE source_file_id=<id> LIMIT 100\n\
+                                          c) query_sqlite: SELECT callee_name, kind FROM call_edges \
+                                             WHERE caller_program_id IN (SELECT id FROM programs WHERE file_id=<id>)\n\
+                                          d) query_sqlite: SELECT copybook_name, resolve_status \
+                                             FROM copybook_uses WHERE from_file_id=<id>\n\
+                                          e) read_file: <path>  (read the actual source text)\n\
+                                          f) write_file: docs/<basename>.md  (Markdown document)\n\n\
+                                          STEP 3 — write_file: docs/README.md  (index listing all programs with links)\n\
+                                        Use relative paths for all write_file calls (e.g. docs/MAIN.md)."
+                                    ));
                                     is_command = false;
                                 } else {
                                     // ── Specific file(s) mode ──────────────────────────────
@@ -564,21 +564,19 @@ impl App {
                                             )
                                         };
 
-                                        if let Some(last) = self.messages.last_mut() {
-                                            last.text = format!(
-                                                "Generate Markdown documentation for: {names}\n\n\
-                                                For EACH file below, follow these steps in order:\n\
-                                                {per_file}\n\n\
-                                                Each docs/<stem>.md must include:\n\
-                                                - Program name and purpose (from IDENTIFICATION DIVISION)\n\
-                                                - Data structure summary (levels, PIC clauses, sections — from DB)\n\
-                                                - CALL graph and COPY dependencies (from DB)\n\
-                                                - Key PROCEDURE paragraphs with brief explanation\n\
-                                                - Notable code excerpts from the source\
-                                                {warn}",
-                                                names = names.join(", ")
-                                            );
-                                        }
+                                        self.custom_prompt_override = Some(format!(
+                                            "Generate Markdown documentation for: {names}\n\n\
+                                            For EACH file below, follow these steps in order:\n\
+                                            {per_file}\n\n\
+                                            Each docs/<stem>.md must include:\n\
+                                            - Program name and purpose (from IDENTIFICATION DIVISION)\n\
+                                            - Data structure summary (levels, PIC clauses, sections — from DB)\n\
+                                            - CALL graph and COPY dependencies (from DB)\n\
+                                            - Key PROCEDURE paragraphs with brief explanation\n\
+                                            - Notable code excerpts from the source\
+                                            {warn}",
+                                            names = names.join(", ")
+                                        ));
                                         is_command = false;
                                     }
                                 }
@@ -629,7 +627,13 @@ fn trigger_chat_task(app: &mut App, tx: &tokio::sync::mpsc::UnboundedSender<Task
 
     // Trigger LLM request
     let router = Arc::clone(&app.router);
-    let history = app.messages.clone();
+    let mut history = app.messages.clone();
+    if let Some(ref prompt) = app.custom_prompt_override {
+        if let Some(last) = history.last_mut() {
+            last.text = prompt.clone();
+        }
+    }
+    app.custom_prompt_override = None;
     let routing_mode = app.routing_mode;
     let sandbox_path = app.sandbox_path.clone();
     let tx = tx.clone();
@@ -735,7 +739,8 @@ pub fn run_tui() -> Result<(), io::Error> {
                             if msg.text == "Thinking..."
                                 || msg.text == "思考中 / Thinking..."
                                 || (msg.text.starts_with("(Routed:")
-                                    && (msg.text.contains("Thinking...") || msg.text.contains("思考中")))
+                                    && (msg.text.contains("Thinking...")
+                                        || msg.text.contains("思考中")))
                             {
                                 msg.text = format!(
                                     "(Using {}) [Thinking Process]\n{}",
@@ -748,7 +753,8 @@ pub fn run_tui() -> Result<(), io::Error> {
                             if msg.text == "Thinking..."
                                 || msg.text == "思考中 / Thinking..."
                                 || (msg.text.starts_with("(Routed:")
-                                    && (msg.text.contains("Thinking...") || msg.text.contains("思考中")))
+                                    && (msg.text.contains("Thinking...")
+                                        || msg.text.contains("思考中")))
                             {
                                 msg.text = format!("(Using {}) {}", model_used, delta);
                             } else {
@@ -776,7 +782,8 @@ pub fn run_tui() -> Result<(), io::Error> {
                         if msg.text == "Thinking..."
                             || msg.text == "思考中 / Thinking..."
                             || (msg.text.starts_with("(Routed:")
-                                && (msg.text.contains("Thinking...") || msg.text.contains("思考中")))
+                                && (msg.text.contains("Thinking...")
+                                    || msg.text.contains("思考中")))
                         {
                             msg.text =
                                 format!("(Using {}) Operation completed successfully.", model_used);
@@ -803,7 +810,8 @@ pub fn run_tui() -> Result<(), io::Error> {
                         }
                         Err(err) => {
                             if let Some(msg) = app.messages.iter_mut().last() {
-                                if msg.text.contains("Thinking...") || msg.text.contains("思考中") {
+                                if msg.text.contains("Thinking...") || msg.text.contains("思考中")
+                                {
                                     msg.text = format!("(Using {}) Error: {}", model_used, err);
                                 } else {
                                     msg.text.push_str(&format!("\n[Error: {}]", err));

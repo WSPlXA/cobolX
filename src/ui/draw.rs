@@ -8,25 +8,44 @@ use ratatui::{
 };
 
 pub fn draw(f: &mut Frame, app: &mut App) {
-    // Keep a stable vertical screen layout to prevent flickering
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .margin(1)
-        .constraints(
-            [
-                Constraint::Length(8), // Spring Boot-style ASCII banner
-                Constraint::Min(3),    // Chat Console log
-                Constraint::Length(1), // Agent status / Sandbox line
-                Constraint::Length(3), // Input prompt
-                Constraint::Length(3), // Footer instructions
-            ]
-            .as_ref(),
-        )
-        .split(f.size());
+    let show_banner = f.size().height >= 22;
 
-    let status_idx = 2;
-    let input_idx = 3;
-    let footer_idx = 4;
+    let chunks = if show_banner {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .margin(1)
+            .constraints(
+                [
+                    Constraint::Length(8), // Spring Boot-style ASCII banner
+                    Constraint::Min(3),    // Chat Console log
+                    Constraint::Length(1), // Agent status / Sandbox line
+                    Constraint::Length(3), // Input prompt
+                    Constraint::Length(3), // Footer instructions
+                ]
+                .as_ref(),
+            )
+            .split(f.size())
+    } else {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .margin(1)
+            .constraints(
+                [
+                    Constraint::Min(3),    // Chat Console log
+                    Constraint::Length(1), // Agent status / Sandbox line
+                    Constraint::Length(3), // Input prompt
+                    Constraint::Length(3), // Footer instructions
+                ]
+                .as_ref(),
+            )
+            .split(f.size())
+    };
+
+    let (banner_idx, console_idx, status_idx, input_idx, footer_idx) = if show_banner {
+        (Some(0), 1, 2, 3, 4)
+    } else {
+        (None, 0, 1, 2, 3)
+    };
 
     // 1. Spring Boot-Style ASCII Banner
     let banner_lines = vec![
@@ -64,12 +83,14 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         ]),
     ];
 
-    let header_block = Paragraph::new(banner_lines).block(
-        Block::default()
-            .borders(Borders::BOTTOM)
-            .border_style(Style::default().fg(Color::DarkGray)),
-    );
-    f.render_widget(header_block, chunks[0]);
+    if let Some(idx) = banner_idx {
+        let header_block = Paragraph::new(banner_lines).block(
+            Block::default()
+                .borders(Borders::BOTTOM)
+                .border_style(Style::default().fg(Color::DarkGray)),
+        );
+        f.render_widget(header_block, chunks[idx]);
+    }
 
     if app.view_mode == crate::ui::tui::ViewMode::SandboxSelect {
         let current_dir = std::env::current_dir().unwrap_or_default();
@@ -112,7 +133,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 ]
                 .as_ref(),
             )
-            .split(chunks[1]);
+            .split(chunks[console_idx]);
 
         let opt1_text = format!(
             " [1] Current Directory (.)\n     Path: {}",
@@ -197,7 +218,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 ]
                 .as_ref(),
             )
-            .split(chunks[1]);
+            .split(chunks[console_idx]);
 
         let mut ds_text = app.config_deepseek_input.clone();
         if app.config_active_field == 0 {
@@ -326,11 +347,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         display_lines.push(Line::from(""));
     }
 
-    let log_height = chunks[1].height as usize;
+    let log_height = chunks[console_idx].height as usize;
     let available_lines = if log_height > 2 { log_height - 2 } else { 0 };
 
-    let console_width = if chunks[1].width > 2 {
-        chunks[1].width - 2
+    let console_width = if chunks[console_idx].width > 2 {
+        chunks[console_idx].width - 2
     } else {
         1
     } as usize;
@@ -371,7 +392,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         )
         .wrap(ratatui::widgets::Wrap { trim: false })
         .scroll((scroll_y, 0));
-    f.render_widget(console_block, chunks[1]);
+    f.render_widget(console_block, chunks[console_idx]);
 
     // 2.5. Agent Status / Sandbox Line
     let status_color = if app.active_agent.is_some() {
