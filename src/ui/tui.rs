@@ -600,6 +600,9 @@ pub fn run_tui() -> Result<(), io::Error> {
         // Non-blocking poll for crossterm events
         if event::poll(std::time::Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
+                if key.kind != event::KeyEventKind::Press {
+                    continue;
+                }
                 if key.code == KeyCode::Char('c')
                     && key.modifiers.contains(event::KeyModifiers::CONTROL)
                 {

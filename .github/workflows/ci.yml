@@ -66,7 +66,7 @@ jobs:
 
   create-release:
     name: Create GitHub Release
-    if: startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/heads/release/')
     runs-on: ubuntu-latest
     needs: [fmt, clippy, test, audit]
     permissions:
@@ -75,11 +75,16 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
+      - name: Prepare Dynamic Version
+        run: node scripts/prepare-version.js
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ env.RELEASE_VERSION }}
+          name: v${{ env.RELEASE_VERSION }}
           draft: false
-          prerelease: false
+          prerelease: ${{ env.IS_CANARY == 'true' }}
           generate_release_notes: true
 
   build-binaries:
@@ -92,8 +97,7 @@ jobs:
       needs.clippy.result == 'success' &&
       needs.test.result == 'success' &&
       needs.audit.result == 'success' &&
-      (needs.create-release.result == 'success' || needs.create-release.result == 'skipped') &&
-      (startsWith(github.ref, 'refs/tags/') || startsWith(github.ref, 'refs/heads/release/') || startsWith(github.head_ref, 'release/'))
+      needs.create-release.result == 'success'
     permissions:
       contents: write
     strategy:
@@ -115,6 +119,9 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
+      - name: Prepare Dynamic Version
+        run: node scripts/prepare-version.js
+
       - name: Install Stable Toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
@@ -128,13 +135,11 @@ jobs:
           archive: $bin-$target
           token: ${{ secrets.GITHUB_TOKEN }}
           use-cross: ${{ matrix.use-cross || false }}
-          dry-run: ${{ !startsWith(github.ref, 'refs/tags/') }}
-
-
+          ref: refs/tags/v${{ env.RELEASE_VERSION }}
 
   publish-npm:
     name: Publish to npm
-    if: startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/heads/release/')
     runs-on: ubuntu-latest
     needs: [build-binaries]
     permissions:
@@ -143,6 +148,9 @@ jobs:
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v4
+
+      - name: Prepare Dynamic Version
+        run: node scripts/prepare-version.js
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -154,4 +162,4 @@ jobs:
         run: npm install -g npm@latest
 
       - name: Publish to npm
-        run: npm publish --access public --provenance
+        run: npm publish --tag ${{ env.NPM_TAG }} --access public --provenance

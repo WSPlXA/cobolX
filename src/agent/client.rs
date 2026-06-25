@@ -877,10 +877,19 @@ impl AgentRouter {
         sandbox: &Path,
         user_path: &str,
     ) -> Result<std::path::PathBuf, String> {
-        let candidate = if std::path::Path::new(user_path).is_absolute() {
-            std::path::PathBuf::from(user_path)
+        // Strip leading separators from non-absolute paths so that an LLM-generated
+        // path like "/docs/README.md" is treated as "docs/README.md" relative to the
+        // sandbox root, rather than escaping to the drive root on Windows.
+        let normalized = if std::path::Path::new(user_path).is_absolute() {
+            user_path.to_string()
         } else {
-            sandbox.join(user_path)
+            user_path.trim_start_matches(['/', '\\']).to_string()
+        };
+
+        let candidate = if std::path::Path::new(&normalized).is_absolute() {
+            std::path::PathBuf::from(&normalized)
+        } else {
+            sandbox.join(&normalized)
         };
 
         // Resolve the sandbox root first so the comparison is reliable even if the
