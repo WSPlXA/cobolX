@@ -31,8 +31,10 @@ impl AgentRouter {
         };
 
         let system_prompt = "You are the COBOLX Verify Agent. Review the draft answer.\n\
-            Look for: incomplete paragraphs, missing values, TODOs, incorrect analysis, \
-            grammar/logic issues, missing files/variables the user asked about.\n\
+            Look for:\n\
+            1. Incomplete paragraphs, missing values, TODOs, incorrect analysis, grammar/logic issues.\n\
+            2. Missing files/variables the user asked about.\n\
+            3. File naming preservation: ensure any documentation written via write_file uses the original base name of the COBOL source file (e.g. docs/XYZ.md for source XYZ.cbl) instead of generic names like entity.md or model.md.\n\
             Return a JSON object ONLY (no markdown wrapping):\n\
             { \"passed\": bool, \"feedback\": \"...\" }"
             .to_string();
@@ -139,6 +141,7 @@ impl AgentRouter {
                         gathered_data,
                         sandbox_path,
                         tx.clone(),
+                        None,
                     )
                     .await?;
                 if let Some(u) = usage {
@@ -157,6 +160,8 @@ impl AgentRouter {
 
             let (temp_tx, mut temp_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
             let real_tx_clone = tx.clone();
+            let write_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let write_buf_clone = write_buf.clone();
 
             let collect_handle = tokio::spawn(async move {
                 let mut accumulated_text = String::new();
@@ -174,7 +179,13 @@ impl AgentRouter {
             });
 
             let res = self
-                .run_explain_agent_stream_internal(&messages, gathered_data, sandbox_path, temp_tx)
+                .run_explain_agent_stream_internal(
+                    &messages,
+                    gathered_data,
+                    sandbox_path,
+                    temp_tx,
+                    Some(write_buf_clone),
+                )
                 .await;
 
             let (accumulated_text, accumulated_reasoning) = match collect_handle.await {
@@ -198,6 +209,13 @@ impl AgentRouter {
                 Ok((passed, feedback)) => {
                     if passed {
                         let _ = tx.send("\x01STATUS:Verify Agent: Validation passed!".to_string());
+                        
+                        if let Ok(lock) = write_buf.lock() {
+                            if let Err(e) = self.commit_write_buffer(&lock) {
+                                let _ = tx.send(format!("\x01STATUS:Failed to commit files: {}", e));
+                            }
+                        }
+
                         if !accumulated_reasoning.is_empty() {
                             let _ = tx.send(format!("\x01REASONING:{}", accumulated_reasoning));
                         }
@@ -232,6 +250,13 @@ impl AgentRouter {
                 }
                 Err(e) => {
                     let _ = tx.send(format!("\x01STATUS:Verify Agent error: {}, skipping...", e));
+                    
+                    if let Ok(lock) = write_buf.lock() {
+                        if let Err(e) = self.commit_write_buffer(&lock) {
+                            let _ = tx.send(format!("\x01STATUS:Failed to commit files: {}", e));
+                        }
+                    }
+
                     if !accumulated_reasoning.is_empty() {
                         let _ = tx.send(format!("\x01REASONING:{}", accumulated_reasoning));
                     }
@@ -268,6 +293,7 @@ impl AgentRouter {
         gathered_data: &str,
         sandbox_path: &Path,
         tx: tokio::sync::mpsc::UnboundedSender<String>,
+        write_buffer: Option<std::sync::Arc<std::sync::Mutex<Vec<(std::path::PathBuf, String)>>>>,
     ) -> Result<(Option<Usage>, &'static str), String> {
         let (api_key, api_url, model_name_static) = if let Some(ref g) = self.glm {
             (
@@ -308,6 +334,7 @@ impl AgentRouter {
             - Explanation/analysis: Markdown document covering program purpose, data structures, \
               business logic, CALL graph, COPY dependencies, and migration notes.\n\
             - Documentation (e.g. /docs): use write_file to write Markdown docs to docs/.\n\
+              CRITICAL: You MUST preserve the original base name of the COBOL source file and replace its extension with `.md` (e.g., write to `docs/XYZ.md` for a source file named `XYZ.cbl` or `XYZ.cob`). Do NOT use generic names like `entity.md` or `model.md` unless explicitly asked.\n\
             Sandbox root for write_file: {sandbox_display}",
             sandbox_display = sandbox_path.to_string_lossy()
         );
@@ -455,21 +482,13 @@ impl AgentRouter {
                     let path_str = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
                     let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
                     let _ = tx.send(format!("\x01STATUS:Writing file: {path_str}"));
-                    match Self::validate_sandbox_path(sandbox_path, path_str) {
+                    match self.write_file(sandbox_path, path_str, content, write_buffer.as_deref()) {
+                        Ok(full_path) => serde_json::json!({
+                            "ok": true,
+                            "path": full_path.to_string_lossy()
+                        })
+                        .to_string(),
                         Err(e) => serde_json::json!({ "error": e }).to_string(),
-                        Ok(full_path) => {
-                            if let Some(parent) = full_path.parent() {
-                                let _ = std::fs::create_dir_all(parent);
-                            }
-                            match std::fs::write(&full_path, content) {
-                                Ok(_) => serde_json::json!({
-                                    "ok": true,
-                                    "path": full_path.to_string_lossy()
-                                })
-                                .to_string(),
-                                Err(e) => serde_json::json!({ "error": e.to_string() }).to_string(),
-                            }
-                        }
                     }
                 } else {
                     serde_json::json!({ "error": format!("Unknown tool: {}", tc.function.name) })

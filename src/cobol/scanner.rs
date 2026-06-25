@@ -29,6 +29,8 @@ fn should_exclude_dir(name: &str) -> bool {
         || name == "node_modules"
         || name == "vendor"
         || name == "build"
+        || name == "tests"
+        || name == "test"
 }
 
 /// Scans entries within `dir`. Does NOT check exclusion on `dir` itself —

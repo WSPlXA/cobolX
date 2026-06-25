@@ -423,4 +423,48 @@ impl AgentRouter {
             }
         })
     }
+
+    /// Writes a file to the sandbox. If a buffer is provided, it is pushed to the buffer instead of writing physically.
+    /// Returns the resolved path or an error string.
+    pub(crate) fn write_file(
+        &self,
+        sandbox: &Path,
+        user_path: &str,
+        content: &str,
+        buffer: Option<&std::sync::Mutex<Vec<(std::path::PathBuf, String)>>>,
+    ) -> Result<std::path::PathBuf, String> {
+        let full_path = Self::validate_sandbox_path(sandbox, user_path)?;
+        if let Some(buf) = buffer {
+            if let Ok(mut lock) = buf.lock() {
+                lock.push((full_path.clone(), content.to_string()));
+            } else {
+                return Err("Failed to lock write buffer".to_string());
+            }
+        } else {
+            if let Some(parent) = full_path.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("Failed to create directories: {e}"))?;
+            }
+            std::fs::write(&full_path, content)
+                .map_err(|e| format!("Failed to write file: {e}"))?;
+        }
+        Ok(full_path)
+    }
+
+    /// Commits a list of buffered writes to disk.
+    pub(crate) fn commit_write_buffer(
+        &self,
+        buffer: &[(std::path::PathBuf, String)],
+    ) -> Result<(), String> {
+        for (full_path, content) in buffer {
+            if let Some(parent) = full_path.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("Failed to create directories: {e}"))?;
+            }
+            std::fs::write(full_path, content)
+                .map_err(|e| format!("Failed to write file: {e}"))?;
+        }
+        Ok(())
+    }
 }
+
