@@ -692,12 +692,14 @@ impl AgentRouter {
 
                 // Phase 1 — silent data retrieval (DB + file reads, no text to UI)
                 let _ = tx.send("\x01STATUS:Filesystem: Gathering data...".to_string());
-                let (gathered_data, retrieval_usage) =
-                    self.run_filesystem_retrieval(&messages, path, tx.clone()).await?;
+                let (gathered_data, retrieval_usage) = self
+                    .run_filesystem_retrieval(&messages, path, tx.clone())
+                    .await?;
 
                 // Phase 2 — stream explanation / write files
-                let (explain_usage, model_name) =
-                    self.run_explain_agent_stream(&messages, &gathered_data, path, tx).await?;
+                let (explain_usage, model_name) = self
+                    .run_explain_agent_stream(&messages, &gathered_data, path, tx)
+                    .await?;
 
                 // Combine usage from both phases
                 let combined = match (retrieval_usage, explain_usage) {
@@ -990,9 +992,17 @@ impl AgentRouter {
         tx: tokio::sync::mpsc::UnboundedSender<String>,
     ) -> Result<(String, Option<Usage>), String> {
         let (api_key, api_url, model_name) = if let Some(ref g) = self.glm {
-            (g.api_key.clone(), "https://open.bigmodel.cn/api/paas/v4/chat/completions", "glm-4-pro")
+            (
+                g.api_key.clone(),
+                "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+                "glm-4-pro",
+            )
         } else if let Some(ref ds) = self.deepseek {
-            (ds.api_key.clone(), "https://api.deepseek.com/chat/completions", "deepseek-chat")
+            (
+                ds.api_key.clone(),
+                "https://api.deepseek.com/chat/completions",
+                "deepseek-chat",
+            )
         } else {
             return Err("No API client for Filesystem Retrieval.".to_string());
         };
@@ -1042,7 +1052,9 @@ impl AgentRouter {
                 messages: messages.clone(),
                 stream: true,
                 temperature: Some(0.1),
-                stream_options: Some(StreamOptions { include_usage: true }),
+                stream_options: Some(StreamOptions {
+                    include_usage: true,
+                }),
                 tools: Some(tools.clone()),
             };
 
@@ -1073,7 +1085,9 @@ impl AgentRouter {
                     let line = buffer[..pos].to_string();
                     buffer.drain(..=pos);
                     let trimmed = line.trim();
-                    if trimmed.is_empty() || trimmed == "data: [DONE]" { continue; }
+                    if trimmed.is_empty() || trimmed == "data: [DONE]" {
+                        continue;
+                    }
                     if let Some(json_str) = trimmed.strip_prefix("data: ") {
                         if let Ok(parsed) = serde_json::from_str::<ChatResponseStream>(json_str) {
                             if let Some(ref u) = parsed.usage {
@@ -1084,10 +1098,15 @@ impl AgentRouter {
                             if let Some(choice) = parsed.choices.first() {
                                 if let Some(ref delta) = choice.delta {
                                     if let Some(ref c) = delta.content {
-                                        if !c.is_empty() { text_this_turn.push_str(c); }
+                                        if !c.is_empty() {
+                                            text_this_turn.push_str(c);
+                                        }
                                     }
                                     if let Some(ref deltas) = delta.tool_calls {
-                                        merge_tool_call_deltas(&mut tool_calls_accumulated, deltas.clone());
+                                        merge_tool_call_deltas(
+                                            &mut tool_calls_accumulated,
+                                            deltas.clone(),
+                                        );
                                     }
                                 }
                             }
@@ -1104,7 +1123,11 @@ impl AgentRouter {
 
             let assistant_msg = ChatMessage {
                 role: "assistant".to_string(),
-                content: if text_this_turn.is_empty() { None } else { Some(text_this_turn) },
+                content: if text_this_turn.is_empty() {
+                    None
+                } else {
+                    Some(text_this_turn)
+                },
                 tool_call_id: None,
                 tool_calls: Some(tool_calls_accumulated.clone()),
             };
@@ -1136,18 +1159,32 @@ impl AgentRouter {
         tx: tokio::sync::mpsc::UnboundedSender<String>,
     ) -> Result<(Option<Usage>, &'static str), String> {
         let (api_key, api_url, model_name_static) = if let Some(ref g) = self.glm {
-            (g.api_key.clone(), "https://open.bigmodel.cn/api/paas/v4/chat/completions", "GLM-4-Pro (Explain Agent)")
+            (
+                g.api_key.clone(),
+                "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+                "GLM-4-Pro (Explain Agent)",
+            )
         } else if let Some(ref ds) = self.deepseek {
-            (ds.api_key.clone(), "https://api.deepseek.com/chat/completions", "DeepSeek (Explain Agent)")
+            (
+                ds.api_key.clone(),
+                "https://api.deepseek.com/chat/completions",
+                "DeepSeek (Explain Agent)",
+            )
         } else {
             return Err("No API client for Explain Agent.".to_string());
         };
-        let model_id = if self.glm.is_some() { "glm-4-pro" } else { "deepseek-chat" };
+        let model_id = if self.glm.is_some() {
+            "glm-4-pro"
+        } else {
+            "deepseek-chat"
+        };
 
         let http_client = reqwest::Client::new();
 
         // Extract the original user question (last user turn)
-        let user_question = original_messages.iter().rev()
+        let user_question = original_messages
+            .iter()
+            .rev()
             .find(|m| m.role == "user")
             .and_then(|m| m.content.as_deref())
             .unwrap_or("")
@@ -1211,7 +1248,9 @@ impl AgentRouter {
                 messages: messages.clone(),
                 stream: true,
                 temperature: Some(0.3),
-                stream_options: Some(StreamOptions { include_usage: true }),
+                stream_options: Some(StreamOptions {
+                    include_usage: true,
+                }),
                 tools: Some(vec![write_file_tool.clone()]),
             };
 
@@ -1243,7 +1282,9 @@ impl AgentRouter {
                     let line = buffer[..pos].to_string();
                     buffer.drain(..=pos);
                     let trimmed = line.trim();
-                    if trimmed.is_empty() || trimmed == "data: [DONE]" { continue; }
+                    if trimmed.is_empty() || trimmed == "data: [DONE]" {
+                        continue;
+                    }
                     if let Some(json_str) = trimmed.strip_prefix("data: ") {
                         if let Ok(parsed) = serde_json::from_str::<ChatResponseStream>(json_str) {
                             if let Some(ref u) = parsed.usage {
@@ -1274,7 +1315,10 @@ impl AgentRouter {
                                         }
                                     }
                                     if let Some(ref deltas) = delta.tool_calls {
-                                        merge_tool_call_deltas(&mut tool_calls_accumulated, deltas.clone());
+                                        merge_tool_call_deltas(
+                                            &mut tool_calls_accumulated,
+                                            deltas.clone(),
+                                        );
                                     }
                                 }
                             }
@@ -1289,18 +1333,22 @@ impl AgentRouter {
 
             let assistant_msg = ChatMessage {
                 role: "assistant".to_string(),
-                content: if text_accumulated.is_empty() { None } else { Some(text_accumulated.clone()) },
+                content: if text_accumulated.is_empty() {
+                    None
+                } else {
+                    Some(text_accumulated.clone())
+                },
                 tool_call_id: None,
                 tool_calls: Some(tool_calls_accumulated.clone()),
             };
             messages.push(assistant_msg);
 
             for tc in &tool_calls_accumulated {
-                let args: serde_json::Value = serde_json::from_str(&tc.function.arguments)
-                    .unwrap_or_default();
+                let args: serde_json::Value =
+                    serde_json::from_str(&tc.function.arguments).unwrap_or_default();
                 let tool_result = if tc.function.name == "write_file" {
                     let path_str = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
-                    let content  = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                    let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
                     let _ = tx.send(format!("\x01STATUS:Writing file: {path_str}"));
                     match Self::validate_sandbox_path(sandbox_path, path_str) {
                         Err(e) => serde_json::json!({ "error": e }).to_string(),
@@ -1315,7 +1363,8 @@ impl AgentRouter {
                         }
                     }
                 } else {
-                    serde_json::json!({ "error": format!("Unknown tool: {}", tc.function.name) }).to_string()
+                    serde_json::json!({ "error": format!("Unknown tool: {}", tc.function.name) })
+                        .to_string()
                 };
                 let _ = tx.send("\x01STATUS:".to_string());
                 messages.push(ChatMessage {
@@ -1396,8 +1445,8 @@ impl AgentRouter {
         sandbox_path: &Path,
         tx: &tokio::sync::mpsc::UnboundedSender<String>,
     ) -> Result<String, String> {
-        let args: serde_json::Value = serde_json::from_str(&tc.function.arguments)
-            .unwrap_or_default();
+        let args: serde_json::Value =
+            serde_json::from_str(&tc.function.arguments).unwrap_or_default();
         Ok(match tc.function.name.as_str() {
             "query_sqlite" => {
                 let sql = args.get("sql").and_then(|v| v.as_str()).unwrap_or("");
@@ -1420,7 +1469,11 @@ impl AgentRouter {
                         Ok(content) => {
                             const MAX: usize = 120_000;
                             let body = if content.len() > MAX {
-                                format!("[truncated: first {MAX} of {} bytes]\n{}", content.len(), &content[..MAX])
+                                format!(
+                                    "[truncated: first {MAX} of {} bytes]\n{}",
+                                    content.len(),
+                                    &content[..MAX]
+                                )
                             } else {
                                 content
                             };
@@ -1438,21 +1491,27 @@ impl AgentRouter {
                     Ok(full_path) => match std::fs::read_dir(&full_path) {
                         Err(e) => serde_json::json!({ "error": e.to_string() }).to_string(),
                         Ok(entries) => {
-                            let sandbox_canon = sandbox_path.canonicalize()
+                            let sandbox_canon = sandbox_path
+                                .canonicalize()
                                 .unwrap_or_else(|_| sandbox_path.to_path_buf());
                             let mut files: Vec<serde_json::Value> = entries
                                 .filter_map(|e| e.ok())
                                 .filter(|e| {
                                     ext_filter.map_or(true, |ext| {
-                                        e.path().extension().and_then(|s| s.to_str())
+                                        e.path()
+                                            .extension()
+                                            .and_then(|s| s.to_str())
                                             .map(|s| format!(".{s}").eq_ignore_ascii_case(ext))
                                             .unwrap_or(false)
                                     })
                                 })
                                 .map(|e| {
                                     let p = e.path();
-                                    let rel = p.strip_prefix(&sandbox_canon)
-                                        .unwrap_or(&p).to_string_lossy().into_owned();
+                                    let rel = p
+                                        .strip_prefix(&sandbox_canon)
+                                        .unwrap_or(&p)
+                                        .to_string_lossy()
+                                        .into_owned();
                                     let kind = if p.is_dir() { "dir" } else { "file" };
                                     serde_json::json!({ "name": rel, "kind": kind })
                                 })
@@ -1465,7 +1524,7 @@ impl AgentRouter {
             }
             "search_in_file" => {
                 let path_str = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
-                let pattern  = args.get("pattern").and_then(|v| v.as_str()).unwrap_or("");
+                let pattern = args.get("pattern").and_then(|v| v.as_str()).unwrap_or("");
                 let _ = tx.send(format!("\x01STATUS:Searching '{pattern}' in {path_str}"));
                 match Self::validate_sandbox_path(sandbox_path, path_str) {
                     Err(e) => serde_json::json!({ "error": e }).to_string(),
@@ -1473,7 +1532,9 @@ impl AgentRouter {
                         Err(e) => serde_json::json!({ "error": e.to_string() }).to_string(),
                         Ok(content) => {
                             let pat_lower = pattern.to_lowercase();
-                            let matches: Vec<serde_json::Value> = content.lines().enumerate()
+                            let matches: Vec<serde_json::Value> = content
+                                .lines()
+                                .enumerate()
                                 .filter(|(_, l)| l.to_lowercase().contains(&pat_lower))
                                 .map(|(i, l)| serde_json::json!({ "line": i + 1, "text": l }))
                                 .collect();
@@ -1482,7 +1543,9 @@ impl AgentRouter {
                     },
                 }
             }
-            unknown => serde_json::json!({ "error": format!("Unknown tool: {unknown}") }).to_string(),
+            unknown => {
+                serde_json::json!({ "error": format!("Unknown tool: {unknown}") }).to_string()
+            }
         })
     }
 
@@ -1496,7 +1559,6 @@ impl AgentRouter {
     ) -> Result<Option<Usage>, String> {
         Err("Replaced by run_filesystem_retrieval + run_explain_agent_stream".to_string())
     }
-
 }
 
 #[cfg(test)]

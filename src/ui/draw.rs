@@ -8,7 +8,7 @@ use ratatui::{
 };
 
 pub fn draw(f: &mut Frame, app: &mut App) {
-    let has_status = app.agent_status.is_some();
+    let has_status = app.active_agent.is_some();
 
     // vertical screen layout
     let chunks = Layout::default()
@@ -387,7 +387,13 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if let Some(ref status_idx_val) = status_idx {
         let spinner_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
         let frame = spinner_frames[app.spinner_tick % spinner_frames.len()];
-        let status_text = app.agent_status.as_deref().unwrap_or("");
+        let status_text = if let Some(ref custom_status) = app.agent_status {
+            custom_status.clone()
+        } else if let Some(ref active) = app.active_agent {
+            format!("Thinking (Using {})...", active)
+        } else {
+            "Thinking...".to_string()
+        };
         let status_line = Line::from(vec![
             Span::styled(format!(" {} ", frame), Style::default().fg(Color::Yellow)),
             Span::styled(
