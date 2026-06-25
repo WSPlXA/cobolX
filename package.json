@@ -23,5 +23,8 @@
   "bugs": {
     "url": "https://github.com/WSPlXA/cobolX/issues"
   },
-  "homepage": "https://github.com/WSPlXA/cobolX#readme"
+  "homepage": "https://github.com/WSPlXA/cobolX#readme",
+  "dependencies": {
+    "cobolx": "^1.0.2-canary.24"
+  }
 }
