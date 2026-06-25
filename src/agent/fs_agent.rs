@@ -1,0 +1,426 @@
+use super::AgentRouter;
+use super::types::merge_tool_call_deltas;
+use super::types::{
+    ChatMessage, ChatRequest, FunctionDefinition, StreamOptions, Tool, ToolCall, Usage,
+};
+use crate::memory::MemoryStore;
+use std::path::Path;
+
+impl AgentRouter {
+    /// Validates `user_path` resolves inside `sandbox`.
+    /// Returns the canonical absolute path or an error string.
+    pub(crate) fn validate_sandbox_path(
+        sandbox: &Path,
+        user_path: &str,
+    ) -> Result<std::path::PathBuf, String> {
+        let normalized = if std::path::Path::new(user_path).is_absolute() {
+            user_path.to_string()
+        } else {
+            user_path.trim_start_matches(['/', '\\']).to_string()
+        };
+
+        let candidate = if std::path::Path::new(&normalized).is_absolute() {
+            std::path::PathBuf::from(&normalized)
+        } else {
+            sandbox.join(&normalized)
+        };
+
+        let sandbox_canon = sandbox
+            .canonicalize()
+            .map_err(|e| format!("Sandbox path error: {e}"))?;
+
+        let clean_canon = |p: &Path| -> String {
+            let s = p.to_string_lossy().into_owned();
+            let s_stripped = if s.starts_with(r"\\?\") {
+                s[4..].to_string()
+            } else {
+                s
+            };
+            s_stripped.replace('\\', "/").to_lowercase()
+        };
+
+        let sandbox_canon_str = clean_canon(&sandbox_canon);
+
+        let mut existing = candidate.clone();
+        let mut suffix = std::path::PathBuf::new();
+        loop {
+            if existing.exists() {
+                break;
+            }
+            if let Some(parent) = existing.parent() {
+                if let Some(file_name) = existing.file_name() {
+                    suffix = std::path::Path::new(file_name).join(&suffix);
+                    existing = parent.to_path_buf();
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+
+        let canon_existing = existing
+            .canonicalize()
+            .map_err(|e| format!("Path resolution error: {e}"))?;
+        let resolved = canon_existing.join(&suffix);
+        let resolved_str = clean_canon(&resolved);
+
+        let is_sub = resolved_str == sandbox_canon_str
+            || (resolved_str.starts_with(&sandbox_canon_str)
+                && (sandbox_canon_str.ends_with('/')
+                    || resolved_str.chars().nth(sandbox_canon_str.chars().count()) == Some('/')));
+
+        if !is_sub {
+            return Err(format!(
+                "Access denied: '{}' is outside the sandbox directory",
+                user_path
+            ));
+        }
+        Ok(resolved)
+    }
+
+    /// Phase 1 — silent read-only data retrieval (DB + files).
+    /// Text from the LLM is captured but NOT sent to `tx`; only STATUS updates are.
+    /// Returns the structured data summary once the LLM stops calling tools.
+    pub(crate) async fn run_filesystem_retrieval(
+        &self,
+        initial_messages: &[ChatMessage],
+        sandbox_path: &Path,
+        tx: tokio::sync::mpsc::UnboundedSender<String>,
+    ) -> Result<(String, Option<Usage>), String> {
+        let (api_key, api_url, model_name) = if let Some(ref g) = self.glm {
+            (
+                g.api_key.clone(),
+                "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+                "glm-4-pro",
+            )
+        } else if let Some(ref ds) = self.deepseek {
+            (
+                ds.api_key.clone(),
+                "https://api.deepseek.com/chat/completions",
+                "deepseek-chat",
+            )
+        } else {
+            return Err("No API client for Filesystem Retrieval.".to_string());
+        };
+
+        let http_client = reqwest::Client::new();
+        let mut messages = initial_messages.to_vec();
+        let sandbox_display = sandbox_path.to_string_lossy();
+
+        if let Some(first_msg) = messages.get_mut(0) {
+            if first_msg.role == "system" {
+                first_msg.content = Some(format!(
+                    "You are the COBOLX Filesystem Retrieval Agent. Your ONLY job is to collect \
+                    raw data about COBOL files using the tools below. Do NOT explain or interpret \
+                    — just gather and output a structured data summary.\n\
+                    \n\
+                    Sandbox root: {sandbox_display}\n\
+                    Use relative paths for all tool calls (e.g. 'src/MAIN.cbl').\n\
+                    \n\
+                    WORKFLOW:\n\
+                    1. query_sqlite: SELECT id, path, kind FROM files\n\
+                    2. query_sqlite: get programs, data_items, call_edges, copybook_uses\n\
+                    3. read_file: raw source text only when needed\n\
+                    4. list_directory / search_in_file: locate files if needed\n\
+                    \n\
+                    When done output a STRUCTURED DATA SUMMARY with section headers \
+                    (## File, ## Programs, ## Data Items, ## Call Graph, ## COPY Dependencies, \
+                    ## Source). Include ALL data. Do not interpret.\n\
+                    \n\
+                    SQLite Schema:\n\
+                    1. files(id, path, kind 'source'|'copybook', size_bytes)\n\
+                    2. programs(id, name, file_id)\n\
+                    3. copybook_uses(id, from_file_id, copybook_name, resolve_status)\n\
+                    4. call_edges(id, caller_program_id, callee_name, kind)\n\
+                    5. data_items(id, program_id, name, level, parent_name, pic, usage_clause, section)"
+                ));
+            }
+        }
+
+        let tools = Self::build_readonly_tools();
+        let mut final_usage = Usage::default();
+        let mut gathered = String::new();
+
+        for _turn in 0..20 {
+            let request_body = ChatRequest {
+                model: model_name.to_string(),
+                messages: messages.clone(),
+                stream: true,
+                temperature: Some(0.1),
+                stream_options: Some(StreamOptions {
+                    include_usage: true,
+                }),
+                tools: Some(tools.clone()),
+            };
+
+            let response = http_client
+                .post(api_url)
+                .header("Authorization", format!("Bearer {}", api_key))
+                .json(&request_body)
+                .send()
+                .await
+                .map_err(|e| format!("Network error: {e}"))?;
+
+            if !response.status().is_success() {
+                let err_body = response.text().await.unwrap_or_default();
+                return Err(format!("Retrieval Agent API error: {err_body}"));
+            }
+
+            use futures_util::StreamExt;
+            let mut stream = response.bytes_stream();
+            let mut buffer = String::new();
+            let mut tool_calls_accumulated: Vec<ToolCall> = Vec::new();
+            let mut text_this_turn = String::new();
+
+            while let Some(chunk_res) = stream.next().await {
+                let chunk = chunk_res.map_err(|e| format!("Stream read error: {e}"))?;
+                buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+                while let Some(pos) = buffer.find('\n') {
+                    let line = buffer[..pos].to_string();
+                    buffer.drain(..=pos);
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() || trimmed == "data: [DONE]" {
+                        continue;
+                    }
+                    if let Some(json_str) = trimmed.strip_prefix("data: ") {
+                        if let Ok(parsed) =
+                            serde_json::from_str::<super::types::ChatResponseStream>(json_str)
+                        {
+                            if let Some(ref u) = parsed.usage {
+                                final_usage.prompt_tokens += u.prompt_tokens;
+                                final_usage.completion_tokens += u.completion_tokens;
+                                final_usage.total_tokens += u.total_tokens;
+                            }
+                            if let Some(choice) = parsed.choices.first() {
+                                if let Some(ref delta) = choice.delta {
+                                    if let Some(ref c) = delta.content {
+                                        if !c.is_empty() {
+                                            text_this_turn.push_str(c);
+                                        }
+                                    }
+                                    if let Some(ref deltas) = delta.tool_calls {
+                                        merge_tool_call_deltas(
+                                            &mut tool_calls_accumulated,
+                                            deltas.clone(),
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if tool_calls_accumulated.is_empty() {
+                gathered = text_this_turn;
+                break;
+            }
+
+            let assistant_msg = ChatMessage {
+                role: "assistant".to_string(),
+                content: if text_this_turn.is_empty() {
+                    None
+                } else {
+                    Some(text_this_turn)
+                },
+                tool_call_id: None,
+                tool_calls: Some(tool_calls_accumulated.clone()),
+            };
+            messages.push(assistant_msg);
+
+            for tc in &tool_calls_accumulated {
+                let result = Self::execute_readonly_tool(tc, sandbox_path, &tx).await?;
+                let _ = tx.send("\x01STATUS:".to_string());
+                messages.push(ChatMessage {
+                    role: "tool".to_string(),
+                    content: Some(result),
+                    tool_call_id: Some(tc.id.clone()),
+                    tool_calls: None,
+                });
+            }
+        }
+
+        let _ = tx.send("\x01STATUS:".to_string());
+        Ok((gathered, Some(final_usage)))
+    }
+
+    fn build_readonly_tools() -> Vec<Tool> {
+        vec![
+            Tool {
+                r#type: "function".to_string(),
+                function: FunctionDefinition {
+                    name: "query_sqlite".to_string(),
+                    description:
+                        "Run a read-only SELECT query against the project SQLite database \
+                        (files, programs, data_items, call_edges, copybook_uses)."
+                            .to_string(),
+                    parameters: serde_json::json!({
+                        "type": "object",
+                        "properties": { "sql": { "type": "string" } },
+                        "required": ["sql"]
+                    }),
+                },
+            },
+            Tool {
+                r#type: "function".to_string(),
+                function: FunctionDefinition {
+                    name: "read_file".to_string(),
+                    description: "Read the full text of a sandbox file.".to_string(),
+                    parameters: serde_json::json!({
+                        "type": "object",
+                        "properties": { "path": { "type": "string" } },
+                        "required": ["path"]
+                    }),
+                },
+            },
+            Tool {
+                r#type: "function".to_string(),
+                function: FunctionDefinition {
+                    name: "list_directory".to_string(),
+                    description: "List entries in a sandbox directory.".to_string(),
+                    parameters: serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "path": { "type": "string" },
+                            "extension": { "type": "string" }
+                        },
+                        "required": ["path"]
+                    }),
+                },
+            },
+            Tool {
+                r#type: "function".to_string(),
+                function: FunctionDefinition {
+                    name: "search_in_file".to_string(),
+                    description: "Search for a text pattern (case-insensitive) in a file."
+                        .to_string(),
+                    parameters: serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "path": { "type": "string" },
+                            "pattern": { "type": "string" }
+                        },
+                        "required": ["path", "pattern"]
+                    }),
+                },
+            },
+        ]
+    }
+
+    async fn execute_readonly_tool(
+        tc: &ToolCall,
+        sandbox_path: &Path,
+        tx: &tokio::sync::mpsc::UnboundedSender<String>,
+    ) -> Result<String, String> {
+        let args: serde_json::Value =
+            serde_json::from_str(&tc.function.arguments).unwrap_or_default();
+        Ok(match tc.function.name.as_str() {
+            "query_sqlite" => {
+                let sql = args.get("sql").and_then(|v| v.as_str()).unwrap_or("");
+                let _ = tx.send("\x01STATUS:Querying project database...".to_string());
+                match MemoryStore::open_or_create(sandbox_path) {
+                    Err(e) => serde_json::json!({ "error": format!("DB error: {e}") }).to_string(),
+                    Ok(store) => match store.query_readonly(sql) {
+                        Ok(val) => val.to_string(),
+                        Err(e) => serde_json::json!({ "error": e.to_string() }).to_string(),
+                    },
+                }
+            }
+            "read_file" => {
+                let path_str = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                let _ = tx.send(format!("\x01STATUS:Reading file: {path_str}"));
+                match Self::validate_sandbox_path(sandbox_path, path_str) {
+                    Err(e) => serde_json::json!({ "error": e }).to_string(),
+                    Ok(full_path) => match std::fs::read_to_string(&full_path) {
+                        Err(e) => serde_json::json!({ "error": e.to_string() }).to_string(),
+                        Ok(content) => {
+                            const MAX: usize = 120_000;
+                            let body = if content.len() > MAX {
+                                format!(
+                                    "[truncated: first {MAX} of {} bytes]\n{}",
+                                    content.len(),
+                                    &content[..MAX]
+                                )
+                            } else {
+                                content
+                            };
+                            serde_json::json!({ "path": full_path.to_string_lossy(), "content": body })
+                                .to_string()
+                        }
+                    },
+                }
+            }
+            "list_directory" => {
+                let path_str = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+                let ext_filter = args.get("extension").and_then(|v| v.as_str());
+                let _ = tx.send(format!("\x01STATUS:Listing directory: {path_str}"));
+                match Self::validate_sandbox_path(sandbox_path, path_str) {
+                    Err(e) => serde_json::json!({ "error": e }).to_string(),
+                    Ok(full_path) => match std::fs::read_dir(&full_path) {
+                        Err(e) => serde_json::json!({ "error": e.to_string() }).to_string(),
+                        Ok(entries) => {
+                            let sandbox_canon = sandbox_path
+                                .canonicalize()
+                                .unwrap_or_else(|_| sandbox_path.to_path_buf());
+                            let mut files: Vec<serde_json::Value> = entries
+                                .filter_map(|e| e.ok())
+                                .filter(|e| {
+                                    ext_filter.map_or(true, |ext| {
+                                        e.path()
+                                            .extension()
+                                            .and_then(|s| s.to_str())
+                                            .map(|s| format!(".{s}").eq_ignore_ascii_case(ext))
+                                            .unwrap_or(false)
+                                    })
+                                })
+                                .map(|e| {
+                                    let p = e.path();
+                                    let rel = p
+                                        .strip_prefix(&sandbox_canon)
+                                        .unwrap_or(&p)
+                                        .to_string_lossy()
+                                        .into_owned();
+                                    let kind = if p.is_dir() { "dir" } else { "file" };
+                                    serde_json::json!({ "name": rel, "kind": kind })
+                                })
+                                .collect();
+                            files.sort_by_key(|v| v["name"].as_str().unwrap_or("").to_string());
+                            serde_json::json!({ "entries": files }).to_string()
+                        }
+                    },
+                }
+            }
+            "search_in_file" => {
+                let path_str = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                let pattern = args.get("pattern").and_then(|v| v.as_str()).unwrap_or("");
+                let _ = tx.send(format!("\x01STATUS:Searching '{pattern}' in {path_str}"));
+                match Self::validate_sandbox_path(sandbox_path, path_str) {
+                    Err(e) => serde_json::json!({ "error": e }).to_string(),
+                    Ok(full_path) => match std::fs::read_to_string(&full_path) {
+                        Err(e) => serde_json::json!({ "error": e.to_string() }).to_string(),
+                        Ok(content) => {
+                            let pat_lower = pattern.to_lowercase();
+                            let matches: Vec<serde_json::Value> = content
+                                .lines()
+                                .enumerate()
+                                .filter(|(_, l)| l.to_lowercase().contains(&pat_lower))
+                                .map(|(i, l)| serde_json::json!({ "line": i + 1, "text": l }))
+                                .collect();
+                            serde_json::json!({
+                                "pattern": pattern,
+                                "match_count": matches.len(),
+                                "matches": matches
+                            })
+                            .to_string()
+                        }
+                    },
+                }
+            }
+            unknown => {
+                serde_json::json!({ "error": format!("Unknown tool: {unknown}") }).to_string()
+            }
+        })
+    }
+}
