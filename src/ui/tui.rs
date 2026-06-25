@@ -4,9 +4,9 @@ use chrono::Local;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use ratatui::{backend::CrosstermBackend, Terminal};
+use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io;
 use std::sync::Arc;
 
@@ -48,7 +48,10 @@ pub enum TaskUpdate {
     Routed(crate::agent::client::Route, &'static str),
     Delta(String, &'static str),
     Status(String),
-    Finished(Result<Option<crate::agent::client::Usage>, String>, &'static str),
+    Finished(
+        Result<Option<crate::agent::client::Usage>, String>,
+        &'static str,
+    ),
 }
 
 pub struct App {
@@ -88,7 +91,7 @@ impl App {
 
         let (_, config_data) = crate::config::ConfigManager::load_or_create();
         let has_keys = router.has_credentials();
-        
+
         let view_mode = if !has_keys {
             ViewMode::Config
         } else {
@@ -97,7 +100,10 @@ impl App {
 
         if !has_keys {
             let path_msg = if let Some(ref path) = router.config_path {
-                format!("Please configure your API keys in the configuration file:\n  {}\nOr input them below directly in this screen.", path)
+                format!(
+                    "Please configure your API keys in the configuration file:\n  {}\nOr input them below directly in this screen.",
+                    path
+                )
             } else {
                 "Please enter your API keys below.".to_string()
             };
@@ -275,16 +281,19 @@ impl App {
                         if let Some(ref path) = self.sandbox_path {
                             self.messages.push(Message {
                                 sender: Sender::Cobolx,
-                                text: format!("Scanning sandbox directory (recursive): {}", path.to_string_lossy()),
+                                text: format!(
+                                    "Scanning sandbox directory (recursive): {}",
+                                    path.to_string_lossy()
+                                ),
                                 timestamp: Local::now().format("%H:%M:%S").to_string(),
                             });
 
-                            match crate::memory::MemoryStore::open_or_create(path)
-                                .and_then(|mut store| {
+                            match crate::memory::MemoryStore::open_or_create(path).and_then(
+                                |mut store| {
                                     crate::cobol::indexer::index_sandbox(path, &mut store)
                                         .map(|report| (report, store.db_path().to_path_buf()))
-                                })
-                            {
+                                },
+                            ) {
                                 Ok((report, db_path)) => {
                                     self.discovered_files = report.files.clone();
                                     if self.discovered_files.is_empty() {
@@ -340,14 +349,16 @@ impl App {
                                     self.routing_mode = RoutingMode::ForceHeavy;
                                     self.messages.push(Message {
                                         sender: Sender::Cobolx,
-                                        text: "Routing mode set to Force Heavy Model (GLM-4-Pro).".to_string(),
+                                        text: "Routing mode set to Force Heavy Model (GLM-4-Pro)."
+                                            .to_string(),
                                         timestamp: Local::now().format("%H:%M:%S").to_string(),
                                     });
                                 }
                                 _ => {
                                     self.messages.push(Message {
                                         sender: Sender::Cobolx,
-                                        text: "Invalid routing mode. Use auto, light, or heavy.".to_string(),
+                                        text: "Invalid routing mode. Use auto, light, or heavy."
+                                            .to_string(),
                                         timestamp: Local::now().format("%H:%M:%S").to_string(),
                                     });
                                 }
@@ -465,7 +476,7 @@ fn trigger_chat_task(app: &mut App, tx: &tokio::sync::mpsc::UnboundedSender<Task
 
         // 2. Execute chat stream
         let (stream_tx, mut stream_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-        
+
         let tx_clone = tx.clone();
         let stream_handle = tokio::spawn(async move {
             while let Some(delta) = stream_rx.recv().await {
@@ -477,12 +488,9 @@ fn trigger_chat_task(app: &mut App, tx: &tokio::sync::mpsc::UnboundedSender<Task
             }
         });
 
-        let res = router.execute_chat_stream(
-            &history,
-            route,
-            sandbox_path.as_deref(),
-            stream_tx,
-        ).await;
+        let res = router
+            .execute_chat_stream(&history, route, sandbox_path.as_deref(), stream_tx)
+            .await;
 
         let _ = stream_handle.await;
 
@@ -517,7 +525,8 @@ pub fn run_tui() -> Result<(), io::Error> {
                     app.active_agent = Some(model_used.to_string());
                     if matches!(
                         route,
-                        crate::agent::client::Route::Database | crate::agent::client::Route::Filesystem
+                        crate::agent::client::Route::Database
+                            | crate::agent::client::Route::Filesystem
                     ) {
                         app.agent_status = Some(format!("Using {}", model_used));
                     }
@@ -530,7 +539,10 @@ pub fn run_tui() -> Result<(), io::Error> {
                 TaskUpdate::Delta(delta, model_used) => {
                     app.active_agent = Some(model_used.to_string());
                     if let Some(msg) = app.messages.iter_mut().last() {
-                        if msg.text == "Thinking..." || (msg.text.starts_with("(Routed:") && msg.text.contains("Thinking...")) {
+                        if msg.text == "Thinking..."
+                            || (msg.text.starts_with("(Routed:")
+                                && msg.text.contains("Thinking..."))
+                        {
                             msg.text = format!("(Using {}) {}", model_used, delta);
                         } else {
                             msg.text.push_str(&delta);
@@ -552,7 +564,7 @@ pub fn run_tui() -> Result<(), io::Error> {
                             app.last_model = Some(model_used.to_string());
                             app.last_prompt_tokens = usage.prompt_tokens;
                             app.last_completion_tokens = usage.completion_tokens;
-                            
+
                             if model_used.contains("DeepSeek") {
                                 app.deepseek_prompt_tokens += usage.prompt_tokens;
                                 app.deepseek_completion_tokens += usage.completion_tokens;
@@ -588,7 +600,9 @@ pub fn run_tui() -> Result<(), io::Error> {
         // Non-blocking poll for crossterm events
         if event::poll(std::time::Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
-                if key.code == KeyCode::Char('c') && key.modifiers.contains(event::KeyModifiers::CONTROL) {
+                if key.code == KeyCode::Char('c')
+                    && key.modifiers.contains(event::KeyModifiers::CONTROL)
+                {
                     break;
                 }
 
@@ -605,52 +619,51 @@ pub fn run_tui() -> Result<(), io::Error> {
                         KeyCode::Up => {
                             app.config_active_field = (app.config_active_field + 3) % 4;
                         }
-                        KeyCode::Enter => {
-                            match app.config_active_field {
-                                0 => {
-                                    app.config_active_field = 1;
-                                }
-                                1 => {
-                                    app.config_active_field = 2;
-                                }
-                                2 => {
-                                    let new_data = crate::config::ConfigData {
-                                        deepseek_api_key: app.config_deepseek_input.trim().to_string(),
-                                        glm_api_key: app.config_glm_input.trim().to_string(),
-                                    };
-                                    match crate::config::ConfigManager::save(&new_data) {
-                                        Ok(_) => {
-                                            app.router = Arc::new(AgentRouter::new());
-                                            app.view_mode = ViewMode::SandboxSelect;
-                                            app.messages.push(Message {
-                                                sender: Sender::Cobolx,
-                                                text: "Configuration successfully saved and reloaded!".to_string(),
-                                                timestamp: Local::now().format("%H:%M:%S").to_string(),
-                                            });
-                                        }
-                                        Err(e) => {
-                                            app.messages.push(Message {
-                                                sender: Sender::Cobolx,
-                                                text: format!("Error saving configuration: {}", e),
-                                                timestamp: Local::now().format("%H:%M:%S").to_string(),
-                                            });
-                                        }
-                                    }
-                                }
-                                3 => {
-                                    if app.router.has_credentials() {
-                                        app.view_mode = ViewMode::Chat;
-                                    } else {
+                        KeyCode::Enter => match app.config_active_field {
+                            0 => {
+                                app.config_active_field = 1;
+                            }
+                            1 => {
+                                app.config_active_field = 2;
+                            }
+                            2 => {
+                                let new_data = crate::config::ConfigData {
+                                    deepseek_api_key: app.config_deepseek_input.trim().to_string(),
+                                    glm_api_key: app.config_glm_input.trim().to_string(),
+                                };
+                                match crate::config::ConfigManager::save(&new_data) {
+                                    Ok(_) => {
+                                        app.router = Arc::new(AgentRouter::new());
+                                        app.view_mode = ViewMode::SandboxSelect;
                                         app.messages.push(Message {
                                             sender: Sender::Cobolx,
-                                            text: "Cannot cancel configuration: No API credentials found. Please set at least one key to save.".to_string(),
+                                            text: "Configuration successfully saved and reloaded!"
+                                                .to_string(),
+                                            timestamp: Local::now().format("%H:%M:%S").to_string(),
+                                        });
+                                    }
+                                    Err(e) => {
+                                        app.messages.push(Message {
+                                            sender: Sender::Cobolx,
+                                            text: format!("Error saving configuration: {}", e),
                                             timestamp: Local::now().format("%H:%M:%S").to_string(),
                                         });
                                     }
                                 }
-                                _ => {}
                             }
-                        }
+                            3 => {
+                                if app.router.has_credentials() {
+                                    app.view_mode = ViewMode::Chat;
+                                } else {
+                                    app.messages.push(Message {
+                                            sender: Sender::Cobolx,
+                                            text: "Cannot cancel configuration: No API credentials found. Please set at least one key to save.".to_string(),
+                                            timestamp: Local::now().format("%H:%M:%S").to_string(),
+                                        });
+                                }
+                            }
+                            _ => {}
+                        },
                         KeyCode::Char(c) => {
                             if app.config_active_field == 0 {
                                 app.config_deepseek_input.push(c);
@@ -676,7 +689,9 @@ pub fn run_tui() -> Result<(), io::Error> {
                             let resolved = if app.sandbox_active_option == 0 {
                                 std::env::current_dir().ok()
                             } else {
-                                std::env::current_dir().ok().and_then(|p| p.parent().map(|parent| parent.to_path_buf()))
+                                std::env::current_dir()
+                                    .ok()
+                                    .and_then(|p| p.parent().map(|parent| parent.to_path_buf()))
                             };
                             if let Some(path) = resolved {
                                 app.sandbox_path = Some(path.clone());

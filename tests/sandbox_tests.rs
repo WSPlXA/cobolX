@@ -7,10 +7,22 @@ fn test_scan_finds_cobol_files_flat() {
     let dir = tempdir().unwrap();
 
     // Create mock COBOL files with various supported extensions
-    File::create(dir.path().join("main.cbl")).unwrap().write_all(b"IDENTIFICATION DIVISION.").unwrap();
-    File::create(dir.path().join("utility.cpy")).unwrap().write_all(b"01 WS-VAR PIC X.").unwrap();
-    File::create(dir.path().join("test.cob")).unwrap().write_all(b"PROCEDURE DIVISION.").unwrap();
-    File::create(dir.path().join("other.coo")).unwrap().write_all(b"DATA DIVISION.").unwrap();
+    File::create(dir.path().join("main.cbl"))
+        .unwrap()
+        .write_all(b"IDENTIFICATION DIVISION.")
+        .unwrap();
+    File::create(dir.path().join("utility.cpy"))
+        .unwrap()
+        .write_all(b"01 WS-VAR PIC X.")
+        .unwrap();
+    File::create(dir.path().join("test.cob"))
+        .unwrap()
+        .write_all(b"PROCEDURE DIVISION.")
+        .unwrap();
+    File::create(dir.path().join("other.coo"))
+        .unwrap()
+        .write_all(b"DATA DIVISION.")
+        .unwrap();
 
     // Create non-COBOL files that should be ignored
     File::create(dir.path().join("README.md")).unwrap();
@@ -20,14 +32,20 @@ fn test_scan_finds_cobol_files_flat() {
 
     assert_eq!(result.len(), 4);
 
-    let sources: Vec<_> = result.iter()
+    let sources: Vec<_> = result
+        .iter()
         .filter(|f| f.file_type == rdo::cobol::scanner::CobolFileType::Source)
         .collect();
-    let copybooks: Vec<_> = result.iter()
+    let copybooks: Vec<_> = result
+        .iter()
         .filter(|f| f.file_type == rdo::cobol::scanner::CobolFileType::Copybook)
         .collect();
 
-    assert_eq!(sources.len(), 3, "Should find 3 source files (.cbl, .cob, .coo)");
+    assert_eq!(
+        sources.len(),
+        3,
+        "Should find 3 source files (.cbl, .cob, .coo)"
+    );
     assert_eq!(copybooks.len(), 1, "Should find 1 copybook file (.cpy)");
 }
 
@@ -42,18 +60,37 @@ fn test_scan_recursive_finds_nested_files() {
     fs::create_dir_all(&sub1).unwrap();
     fs::create_dir_all(&sub2_nested).unwrap();
 
-    File::create(dir.path().join("main.cbl")).unwrap().write_all(b"ROOT").unwrap();
-    File::create(sub1.join("helper.cbl")).unwrap().write_all(b"SUB1").unwrap();
-    File::create(sub2.join("process.cob")).unwrap().write_all(b"SUB2").unwrap();
-    File::create(sub2_nested.join("deep.cpy")).unwrap().write_all(b"DEEP").unwrap();
+    File::create(dir.path().join("main.cbl"))
+        .unwrap()
+        .write_all(b"ROOT")
+        .unwrap();
+    File::create(sub1.join("helper.cbl"))
+        .unwrap()
+        .write_all(b"SUB1")
+        .unwrap();
+    File::create(sub2.join("process.cob"))
+        .unwrap()
+        .write_all(b"SUB2")
+        .unwrap();
+    File::create(sub2_nested.join("deep.cpy"))
+        .unwrap()
+        .write_all(b"DEEP")
+        .unwrap();
 
     let result = rdo::cobol::scanner::scan_sandbox(dir.path()).unwrap();
 
-    assert_eq!(result.len(), 4, "Should find all 4 COBOL files across nested dirs");
+    assert_eq!(
+        result.len(),
+        4,
+        "Should find all 4 COBOL files across nested dirs"
+    );
 
     // Verify paths are sorted
     for i in 1..result.len() {
-        assert!(result[i - 1].path <= result[i].path, "Results should be sorted by path");
+        assert!(
+            result[i - 1].path <= result[i].path,
+            "Results should be sorted by path"
+        );
     }
 }
 
@@ -70,7 +107,15 @@ fn test_scan_excludes_hidden_and_build_dirs() {
     let hidden_dir = dir.path().join(".hidden");
     let valid_dir = dir.path().join("src");
 
-    for d in &[&git_dir, &target_dir, &node_modules, &vendor_dir, &build_dir, &hidden_dir, &valid_dir] {
+    for d in &[
+        &git_dir,
+        &target_dir,
+        &node_modules,
+        &vendor_dir,
+        &build_dir,
+        &hidden_dir,
+        &valid_dir,
+    ] {
         fs::create_dir_all(d).unwrap();
     }
 
@@ -83,14 +128,25 @@ fn test_scan_excludes_hidden_and_build_dirs() {
     File::create(hidden_dir.join("secret.cbl")).unwrap();
 
     // Put COBOL files in valid dirs (SHOULD be found)
-    File::create(dir.path().join("root.cbl")).unwrap().write_all(b"ROOT").unwrap();
-    File::create(valid_dir.join("app.cob")).unwrap().write_all(b"APP").unwrap();
+    File::create(dir.path().join("root.cbl"))
+        .unwrap()
+        .write_all(b"ROOT")
+        .unwrap();
+    File::create(valid_dir.join("app.cob"))
+        .unwrap()
+        .write_all(b"APP")
+        .unwrap();
 
     let result = rdo::cobol::scanner::scan_sandbox(dir.path()).unwrap();
 
-    assert_eq!(result.len(), 2, "Should only find files outside excluded directories");
+    assert_eq!(
+        result.len(),
+        2,
+        "Should only find files outside excluded directories"
+    );
 
-    let names: Vec<String> = result.iter()
+    let names: Vec<String> = result
+        .iter()
         .map(|f| f.path.file_name().unwrap().to_string_lossy().into_owned())
         .collect();
     assert!(names.contains(&"root.cbl".to_string()));
@@ -110,7 +166,10 @@ fn test_scan_tracks_file_size() {
     let dir = tempdir().unwrap();
 
     let content = b"IDENTIFICATION DIVISION.\nPROGRAM-ID. HELLO.\n";
-    File::create(dir.path().join("sized.cbl")).unwrap().write_all(content).unwrap();
+    File::create(dir.path().join("sized.cbl"))
+        .unwrap()
+        .write_all(content)
+        .unwrap();
 
     let result = rdo::cobol::scanner::scan_sandbox(dir.path()).unwrap();
 

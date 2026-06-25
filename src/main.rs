@@ -1,9 +1,8 @@
 mod agent;
-mod ui;
-mod config;
 mod cobol;
+mod config;
 mod memory;
-
+mod ui;
 
 #[tokio::main]
 async fn main() {

@@ -4,7 +4,7 @@ use crate::cobol::layout::compute_physical_layout;
 pub use crate::cobol::model::{
     CallKind, CallSummary, CopybookSummary, IndexReport, ProgramSummary,
 };
-use crate::cobol::scanner::{scan_sandbox, CobolFileType};
+use crate::cobol::scanner::{CobolFileType, scan_sandbox};
 use crate::cobol::source_parser::parse_source_file;
 use crate::memory::MemoryStore;
 use rusqlite::params;

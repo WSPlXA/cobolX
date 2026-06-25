@@ -387,10 +387,20 @@ mod tests {
         // 2. Reject modifying queries
         let res_insert = store.query_readonly("INSERT INTO files (path, kind, size_bytes, mtime_unix) VALUES ('test.cob', 'source', 10, 0)");
         assert!(res_insert.is_err());
-        assert!(res_insert.unwrap_err().to_string().contains("Only SELECT queries are allowed"));
+        assert!(
+            res_insert
+                .unwrap_err()
+                .to_string()
+                .contains("Only SELECT queries are allowed")
+        );
 
         let res_drop = store.query_readonly("DROP TABLE files");
         assert!(res_drop.is_err());
-        assert!(res_drop.unwrap_err().to_string().contains("Only SELECT queries are allowed"));
+        assert!(
+            res_drop
+                .unwrap_err()
+                .to_string()
+                .contains("Only SELECT queries are allowed")
+        );
     }
 }

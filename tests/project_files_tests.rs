@@ -63,8 +63,10 @@ fn project_file_writer_rejects_unsafe_or_wrong_paths() {
     assert!(store.write_markdown("C:\\tmp\\escape.md", "bad").is_err());
     assert!(store.write_markdown("\\\\srv\\share\\x.md", "bad").is_err());
     assert!(store.write_markdown("CON.md", "bad").is_err());
-    assert!(store
-        .write_markdown("notes/not-markdown.txt", "bad")
-        .is_err());
+    assert!(
+        store
+            .write_markdown("notes/not-markdown.txt", "bad")
+            .is_err()
+    );
     assert!(store.write_skill_file("../SKILL.md", "bad").is_err());
 }

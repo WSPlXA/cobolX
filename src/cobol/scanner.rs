@@ -2,8 +2,8 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CobolFileType {
-    Source,    // .cbl, .cob, .coo
-    Copybook,  // .cpy
+    Source,   // .cbl, .cob, .coo
+    Copybook, // .cpy
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

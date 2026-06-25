@@ -1,10 +1,10 @@
 use crate::ui::tui::{App, Sender};
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
-    Frame,
 };
 
 pub fn draw(f: &mut Frame, app: &mut App) {
@@ -14,24 +14,22 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
-        .constraints(
-            if has_status {
-                vec![
-                    Constraint::Length(8), // Spring Boot-style ASCII banner
-                    Constraint::Min(3),    // Chat Console log
-                    Constraint::Length(1), // Agent status line
-                    Constraint::Length(3), // Input prompt
-                    Constraint::Length(3), // Footer instructions
-                ]
-            } else {
-                vec![
-                    Constraint::Length(8), // Spring Boot-style ASCII banner
-                    Constraint::Min(3),    // Chat Console log
-                    Constraint::Length(3), // Input prompt
-                    Constraint::Length(3), // Footer instructions
-                ]
-            },
-        )
+        .constraints(if has_status {
+            vec![
+                Constraint::Length(8), // Spring Boot-style ASCII banner
+                Constraint::Min(3),    // Chat Console log
+                Constraint::Length(1), // Agent status line
+                Constraint::Length(3), // Input prompt
+                Constraint::Length(3), // Footer instructions
+            ]
+        } else {
+            vec![
+                Constraint::Length(8), // Spring Boot-style ASCII banner
+                Constraint::Min(3),    // Chat Console log
+                Constraint::Length(3), // Input prompt
+                Constraint::Length(3), // Footer instructions
+            ]
+        })
         .split(f.size());
 
     let (status_idx, input_idx, footer_idx) = if has_status {
@@ -42,14 +40,37 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     // 1. Spring Boot-Style ASCII Banner
     let banner_lines = vec![
-        Line::from(Span::styled("  ____ ___  ____   ___  _     __  __ ", Style::default().fg(Color::Green))),
-        Line::from(Span::styled(" / ___/ _ \\| __ ) / _ \\| |    \\ \\/ / ", Style::default().fg(Color::Green))),
-        Line::from(Span::styled("| |  | | | |  _ \\| | | | |     \\  /  ", Style::default().fg(Color::Green))),
-        Line::from(Span::styled("| |__| |_| | |_) | |_| | |___  /  \\  ", Style::default().fg(Color::Green))),
-        Line::from(Span::styled(" \\____\\___/|____/ \\___/|_____|/_/\\_\\ ", Style::default().fg(Color::Green))),
+        Line::from(Span::styled(
+            "  ____ ___  ____   ___  _     __  __ ",
+            Style::default().fg(Color::Green),
+        )),
+        Line::from(Span::styled(
+            " / ___/ _ \\| __ ) / _ \\| |    \\ \\/ / ",
+            Style::default().fg(Color::Green),
+        )),
+        Line::from(Span::styled(
+            "| |  | | | |  _ \\| | | | |     \\  /  ",
+            Style::default().fg(Color::Green),
+        )),
+        Line::from(Span::styled(
+            "| |__| |_| | |_) | |_| | |___  /  \\  ",
+            Style::default().fg(Color::Green),
+        )),
+        Line::from(Span::styled(
+            " \\____\\___/|____/ \\___/|_____|/_/\\_\\ ",
+            Style::default().fg(Color::Green),
+        )),
         Line::from(vec![
-            Span::styled(" :: COBOLX ::", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-            Span::styled("                  (v1.0.0)", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                " :: COBOLX ::",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "                  (v1.0.0)",
+                Style::default().fg(Color::DarkGray),
+            ),
         ]),
     ];
 
@@ -62,10 +83,21 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     if app.view_mode == crate::ui::tui::ViewMode::SandboxSelect {
         let current_dir = std::env::current_dir().unwrap_or_default();
-        let parent_dir = current_dir.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| current_dir.clone());
-        
-        let current_border_color = if app.sandbox_active_option == 0 { Color::Green } else { Color::DarkGray };
-        let parent_border_color = if app.sandbox_active_option == 1 { Color::Green } else { Color::DarkGray };
+        let parent_dir = current_dir
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| current_dir.clone());
+
+        let current_border_color = if app.sandbox_active_option == 0 {
+            Color::Green
+        } else {
+            Color::DarkGray
+        };
+        let parent_border_color = if app.sandbox_active_option == 1 {
+            Color::Green
+        } else {
+            Color::DarkGray
+        };
 
         let current_style = if app.sandbox_active_option == 0 {
             Style::default().fg(Color::LightGreen)
@@ -92,26 +124,28 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             )
             .split(chunks[1]);
 
-        let opt1_text = format!(" [1] Current Directory (.)\n     Path: {}", current_dir.to_string_lossy());
-        let opt1_widget = Paragraph::new(opt1_text)
-            .style(current_style)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(" Option A ")
-                    .border_style(Style::default().fg(current_border_color)),
-            );
+        let opt1_text = format!(
+            " [1] Current Directory (.)\n     Path: {}",
+            current_dir.to_string_lossy()
+        );
+        let opt1_widget = Paragraph::new(opt1_text).style(current_style).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Option A ")
+                .border_style(Style::default().fg(current_border_color)),
+        );
         f.render_widget(opt1_widget, sandbox_chunks[1]);
 
-        let opt2_text = format!(" [2] Parent Directory (..)\n     Path: {}", parent_dir.to_string_lossy());
-        let opt2_widget = Paragraph::new(opt2_text)
-            .style(parent_style)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(" Option B ")
-                    .border_style(Style::default().fg(parent_border_color)),
-            );
+        let opt2_text = format!(
+            " [2] Parent Directory (..)\n     Path: {}",
+            parent_dir.to_string_lossy()
+        );
+        let opt2_widget = Paragraph::new(opt2_text).style(parent_style).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Option B ")
+                .border_style(Style::default().fg(parent_border_color)),
+        );
         f.render_widget(opt2_widget, sandbox_chunks[3]);
 
         // Draw instructions
@@ -131,16 +165,30 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
 
     if app.view_mode == crate::ui::tui::ViewMode::Config {
-        let ds_border_color = if app.config_active_field == 0 { Color::Green } else { Color::DarkGray };
-        let glm_border_color = if app.config_active_field == 1 { Color::Green } else { Color::DarkGray };
-        
+        let ds_border_color = if app.config_active_field == 0 {
+            Color::Green
+        } else {
+            Color::DarkGray
+        };
+        let glm_border_color = if app.config_active_field == 1 {
+            Color::Green
+        } else {
+            Color::DarkGray
+        };
+
         let save_style = if app.config_active_field == 2 {
-            Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Green)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::Green)
         };
         let cancel_style = if app.config_active_field == 3 {
-            Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Green)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::Gray)
         };
@@ -251,7 +299,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             Sender::User => Style::default().fg(Color::White),
             Sender::Cobolx => Style::default().fg(Color::LightGreen),
         };
-        
+
         let lines: Vec<&str> = msg.text.split('\n').collect();
         for (i, line_str) in lines.iter().enumerate() {
             if i == 0 {
@@ -262,19 +310,24 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                     Span::styled(*line_str, text_style),
                 ]));
             } else {
-                display_lines.push(Line::from(vec![
-                    Span::styled(format!("               {}", line_str), text_style),
-                ]));
+                display_lines.push(Line::from(vec![Span::styled(
+                    format!("               {}", line_str),
+                    text_style,
+                )]));
             }
         }
-        
+
         display_lines.push(Line::from(""));
     }
 
     let log_height = chunks[1].height as usize;
     let available_lines = if log_height > 2 { log_height - 2 } else { 0 };
 
-    let console_width = if chunks[1].width > 2 { chunks[1].width - 2 } else { 1 } as usize;
+    let console_width = if chunks[1].width > 2 {
+        chunks[1].width - 2
+    } else {
+        1
+    } as usize;
     let mut total_wrapped_height = 0;
     for line in &display_lines {
         let content_len: usize = line.spans.iter().map(|s| s.content.chars().count()).sum();
@@ -296,7 +349,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Some(agent) => format!(" COBOLX Console [Active: {}] ", agent),
         None => " COBOLX Console ".to_string(),
     };
-    let border_color = if app.active_agent.is_some() { Color::Green } else { Color::DarkGray };
+    let border_color = if app.active_agent.is_some() {
+        Color::Green
+    } else {
+        Color::DarkGray
+    };
 
     let console_block = Paragraph::new(display_lines)
         .block(
@@ -316,7 +373,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         let status_text = app.agent_status.as_deref().unwrap_or("");
         let status_line = Line::from(vec![
             Span::styled(format!(" {} ", frame), Style::default().fg(Color::Yellow)),
-            Span::styled(status_text, Style::default().fg(Color::Yellow).add_modifier(Modifier::ITALIC)),
+            Span::styled(
+                status_text,
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::ITALIC),
+            ),
         ]);
         let status_widget = Paragraph::new(status_line);
         f.render_widget(status_widget, chunks[*status_idx_val]);

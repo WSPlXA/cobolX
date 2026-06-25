@@ -1,6 +1,6 @@
-use crate::ui::tui::Message;
 use crate::config::ConfigManager;
 use crate::memory::MemoryStore;
+use crate::ui::tui::Message;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -141,7 +141,11 @@ impl DeepSeekClient {
         }
     }
 
-    pub async fn call_api(&self, messages: &[ChatMessage], temperature: Option<f32>) -> Result<String, String> {
+    pub async fn call_api(
+        &self,
+        messages: &[ChatMessage],
+        temperature: Option<f32>,
+    ) -> Result<String, String> {
         let request_body = ChatRequest {
             model: "deepseek-chat".to_string(),
             messages: messages.to_vec(),
@@ -188,7 +192,9 @@ impl DeepSeekClient {
             messages: messages.to_vec(),
             stream: true,
             temperature,
-            stream_options: Some(StreamOptions { include_usage: true }),
+            stream_options: Some(StreamOptions {
+                include_usage: true,
+            }),
             tools: None,
         };
 
@@ -260,7 +266,11 @@ impl GlmClient {
         }
     }
 
-    pub async fn call_api(&self, messages: &[ChatMessage], temperature: Option<f32>) -> Result<String, String> {
+    pub async fn call_api(
+        &self,
+        messages: &[ChatMessage],
+        temperature: Option<f32>,
+    ) -> Result<String, String> {
         let request_body = ChatRequest {
             model: "glm-4-pro".to_string(),
             messages: messages.to_vec(),
@@ -307,7 +317,9 @@ impl GlmClient {
             messages: messages.to_vec(),
             stream: true,
             temperature,
-            stream_options: Some(StreamOptions { include_usage: true }),
+            stream_options: Some(StreamOptions {
+                include_usage: true,
+            }),
             tools: None,
         };
 
@@ -415,10 +427,9 @@ impl AgentRouter {
 
         let (config_path_str, config_data) = ConfigManager::load_or_create();
 
-        let file_deepseek = Some(config_data.deepseek_api_key.trim().to_string())
-            .filter(|k| !k.is_empty());
-        let file_glm = Some(config_data.glm_api_key.trim().to_string())
-            .filter(|k| !k.is_empty());
+        let file_deepseek =
+            Some(config_data.deepseek_api_key.trim().to_string()).filter(|k| !k.is_empty());
+        let file_glm = Some(config_data.glm_api_key.trim().to_string()).filter(|k| !k.is_empty());
 
         let final_deepseek = env_deepseek.or(file_deepseek);
         let final_glm = env_glm.or(file_glm);
@@ -487,9 +498,14 @@ impl AgentRouter {
 
     /// Dispatches prompt with dialog history memory to the selected sub-agent
     #[allow(dead_code)]
-    pub async fn execute_chat(&self, history: &[Message], route: Route, _sandbox_path: Option<&Path>) -> Result<(String, &'static str), String> {
+    pub async fn execute_chat(
+        &self,
+        history: &[Message],
+        route: Route,
+        _sandbox_path: Option<&Path>,
+    ) -> Result<(String, &'static str), String> {
         let mut messages = Vec::new();
-        
+
         // System prompt defining COBOLX identity
         messages.push(ChatMessage {
             role: "system".to_string(),
@@ -505,8 +521,8 @@ impl AgentRouter {
                 crate::ui::tui::Sender::Cobolx => "assistant".to_string(),
             };
             // Skip mock response text headers or placeholders
-            if msg.text.starts_with("Received prompt:") 
-                || msg.text == "Thinking..." 
+            if msg.text.starts_with("Received prompt:")
+                || msg.text == "Thinking..."
                 || msg.text.starts_with("Routing...")
                 || msg.text.starts_with("(Routed:")
             {
@@ -535,7 +551,10 @@ impl AgentRouter {
                     let res = g.call_api(&messages, None).await;
                     res.map(|text| (text, "GLM-4-Pro (Fallback)"))
                 } else {
-                    Err("No API client initialized. Set DEEPSEEK_API_KEY or GLM_API_KEY.".to_string())
+                    Err(
+                        "No API client initialized. Set DEEPSEEK_API_KEY or GLM_API_KEY."
+                            .to_string(),
+                    )
                 }
             }
             Route::Heavy => {
@@ -546,7 +565,10 @@ impl AgentRouter {
                     let res = ds.call_api(&messages, None).await;
                     res.map(|text| (text, "DeepSeek (Fallback)"))
                 } else {
-                    Err("No API client initialized. Set DEEPSEEK_API_KEY or GLM_API_KEY.".to_string())
+                    Err(
+                        "No API client initialized. Set DEEPSEEK_API_KEY or GLM_API_KEY."
+                            .to_string(),
+                    )
                 }
             }
             Route::Database | Route::Filesystem => {
@@ -564,7 +586,7 @@ impl AgentRouter {
         tx: tokio::sync::mpsc::UnboundedSender<String>,
     ) -> Result<(Option<Usage>, &'static str), String> {
         let mut messages = Vec::new();
-        
+
         // System prompt defining COBOLX identity
         messages.push(ChatMessage {
             role: "system".to_string(),
@@ -580,8 +602,8 @@ impl AgentRouter {
                 crate::ui::tui::Sender::Cobolx => "assistant".to_string(),
             };
             // Skip mock response text headers or placeholders
-            if msg.text.starts_with("Received prompt:") 
-                || msg.text == "Thinking..." 
+            if msg.text.starts_with("Received prompt:")
+                || msg.text == "Thinking..."
                 || msg.text.starts_with("Routing...")
                 || msg.text.starts_with("(Routed:")
             {
@@ -610,7 +632,10 @@ impl AgentRouter {
                     let res = g.call_api_stream(&messages, None, tx).await;
                     res.map(|u| (u, "GLM-4-Pro (Fallback)"))
                 } else {
-                    Err("No API client initialized. Set DEEPSEEK_API_KEY or GLM_API_KEY.".to_string())
+                    Err(
+                        "No API client initialized. Set DEEPSEEK_API_KEY or GLM_API_KEY."
+                            .to_string(),
+                    )
                 }
             }
             Route::Heavy => {
@@ -621,7 +646,10 @@ impl AgentRouter {
                     let res = ds.call_api_stream(&messages, None, tx).await;
                     res.map(|u| (u, "DeepSeek (Fallback)"))
                 } else {
-                    Err("No API client initialized. Set DEEPSEEK_API_KEY or GLM_API_KEY.".to_string())
+                    Err(
+                        "No API client initialized. Set DEEPSEEK_API_KEY or GLM_API_KEY."
+                            .to_string(),
+                    )
                 }
             }
             Route::Database => {
@@ -638,7 +666,9 @@ impl AgentRouter {
             }
             Route::Filesystem => {
                 let Some(path) = sandbox_path else {
-                    return Err("Filesystem operations require a configured sandbox path.".to_string());
+                    return Err(
+                        "Filesystem operations require a configured sandbox path.".to_string()
+                    );
                 };
                 let model_name = if self.glm.is_some() {
                     "GLM-4-Pro (Filesystem Sub-Agent)"
@@ -658,9 +688,17 @@ impl AgentRouter {
         tx: tokio::sync::mpsc::UnboundedSender<String>,
     ) -> Result<Option<Usage>, String> {
         let (api_key, api_url, model_name) = if let Some(ref g) = self.glm {
-            (g.api_key.clone(), "https://open.bigmodel.cn/api/paas/v4/chat/completions", "glm-4-pro")
+            (
+                g.api_key.clone(),
+                "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+                "glm-4-pro",
+            )
         } else if let Some(ref ds) = self.deepseek {
-            (ds.api_key.clone(), "https://api.deepseek.com/chat/completions", "deepseek-chat")
+            (
+                ds.api_key.clone(),
+                "https://api.deepseek.com/chat/completions",
+                "deepseek-chat",
+            )
         } else {
             return Err("No API client initialized for Database Sub-Agent.".to_string());
         };
@@ -713,7 +751,9 @@ impl AgentRouter {
                 messages: messages.clone(),
                 stream: true,
                 temperature: Some(0.0),
-                stream_options: Some(StreamOptions { include_usage: true }),
+                stream_options: Some(StreamOptions {
+                    include_usage: true,
+                }),
                 tools: Some(tools.clone()),
             };
 
@@ -765,7 +805,10 @@ impl AgentRouter {
                                     }
                                 }
                                 if let Some(ref deltas) = choice.delta.tool_calls {
-                                    merge_tool_call_deltas(&mut tool_calls_accumulated, deltas.clone());
+                                    merge_tool_call_deltas(
+                                        &mut tool_calls_accumulated,
+                                        deltas.clone(),
+                                    );
                                 }
                             }
                         }
@@ -774,7 +817,9 @@ impl AgentRouter {
             }
 
             if !tool_calls_accumulated.is_empty() {
-                let _ = tx.send("\x01STATUS:Using Database Sub-Agent: Querying SQLite database...".to_string());
+                let _ = tx.send(
+                    "\x01STATUS:Using Database Sub-Agent: Querying SQLite database...".to_string(),
+                );
 
                 let assistant_msg = ChatMessage {
                     role: "assistant".to_string(),
@@ -789,10 +834,13 @@ impl AgentRouter {
 
                 for tc in &tool_calls_accumulated {
                     if tc.function.name == "query_sqlite" {
-                        let parsed_args: serde_json::Value = serde_json::from_str(&tc.function.arguments)
-                            .map_err(|e| format!("Failed to parse function arguments: {}", e))?;
-                        
-                        let sql = parsed_args.get("sql")
+                        let parsed_args: serde_json::Value =
+                            serde_json::from_str(&tc.function.arguments).map_err(|e| {
+                                format!("Failed to parse function arguments: {}", e)
+                            })?;
+
+                        let sql = parsed_args
+                            .get("sql")
                             .and_then(|v| v.as_str())
                             .unwrap_or("");
 
@@ -800,7 +848,8 @@ impl AgentRouter {
                             Ok(json_val) => json_val.to_string(),
                             Err(err) => serde_json::json!({
                                 "error": err.to_string()
-                            }).to_string(),
+                            })
+                            .to_string(),
                         };
 
                         let tool_msg = ChatMessage {
@@ -824,7 +873,10 @@ impl AgentRouter {
 
     /// Validates that `user_path` resolves to a location inside `sandbox`.
     /// Returns the canonical absolute path if safe, or an error string.
-    fn validate_sandbox_path(sandbox: &Path, user_path: &str) -> Result<std::path::PathBuf, String> {
+    fn validate_sandbox_path(
+        sandbox: &Path,
+        user_path: &str,
+    ) -> Result<std::path::PathBuf, String> {
         let candidate = if std::path::Path::new(user_path).is_absolute() {
             std::path::PathBuf::from(user_path)
         } else {
@@ -880,9 +932,17 @@ impl AgentRouter {
         tx: tokio::sync::mpsc::UnboundedSender<String>,
     ) -> Result<Option<Usage>, String> {
         let (api_key, api_url, model_name) = if let Some(ref g) = self.glm {
-            (g.api_key.clone(), "https://open.bigmodel.cn/api/paas/v4/chat/completions", "glm-4-pro")
+            (
+                g.api_key.clone(),
+                "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+                "glm-4-pro",
+            )
         } else if let Some(ref ds) = self.deepseek {
-            (ds.api_key.clone(), "https://api.deepseek.com/chat/completions", "deepseek-chat")
+            (
+                ds.api_key.clone(),
+                "https://api.deepseek.com/chat/completions",
+                "deepseek-chat",
+            )
         } else {
             return Err("No API client initialized for Filesystem Sub-Agent.".to_string());
         };
@@ -940,7 +1000,9 @@ impl AgentRouter {
             r#type: "function".to_string(),
             function: FunctionDefinition {
                 name: "write_file".to_string(),
-                description: "Create or overwrite a file inside the sandbox with the given content.".to_string(),
+                description:
+                    "Create or overwrite a file inside the sandbox with the given content."
+                        .to_string(),
                 parameters: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -962,7 +1024,8 @@ impl AgentRouter {
             r#type: "function".to_string(),
             function: FunctionDefinition {
                 name: "list_directory".to_string(),
-                description: "List files and subdirectories inside a sandbox directory.".to_string(),
+                description: "List files and subdirectories inside a sandbox directory."
+                    .to_string(),
                 parameters: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -1002,7 +1065,12 @@ impl AgentRouter {
             },
         };
 
-        let tools = vec![read_file_tool, write_file_tool, list_directory_tool, search_in_file_tool];
+        let tools = vec![
+            read_file_tool,
+            write_file_tool,
+            list_directory_tool,
+            search_in_file_tool,
+        ];
         let mut final_usage = Usage::default();
 
         for _turn in 0..8 {
@@ -1011,7 +1079,9 @@ impl AgentRouter {
                 messages: messages.clone(),
                 stream: true,
                 temperature: Some(0.2),
-                stream_options: Some(StreamOptions { include_usage: true }),
+                stream_options: Some(StreamOptions {
+                    include_usage: true,
+                }),
                 tools: Some(tools.clone()),
             };
 
@@ -1060,7 +1130,10 @@ impl AgentRouter {
                                     }
                                 }
                                 if let Some(ref deltas) = choice.delta.tool_calls {
-                                    merge_tool_call_deltas(&mut tool_calls_accumulated, deltas.clone());
+                                    merge_tool_call_deltas(
+                                        &mut tool_calls_accumulated,
+                                        deltas.clone(),
+                                    );
                                 }
                             }
                         }
@@ -1107,7 +1180,8 @@ impl AgentRouter {
                                     serde_json::json!({
                                         "path": full_path.to_string_lossy(),
                                         "content": truncated
-                                    }).to_string()
+                                    })
+                                    .to_string()
                                 }
                             },
                         }
@@ -1130,8 +1204,11 @@ impl AgentRouter {
                                         "ok": true,
                                         "path": full_path.to_string_lossy(),
                                         "bytes_written": content.len()
-                                    }).to_string(),
-                                    Err(e) => serde_json::json!({ "error": e.to_string() }).to_string(),
+                                    })
+                                    .to_string(),
+                                    Err(e) => {
+                                        serde_json::json!({ "error": e.to_string() }).to_string()
+                                    }
                                 }
                             }
                         }
@@ -1143,41 +1220,44 @@ impl AgentRouter {
                         let _ = tx.send(format!("\x01STATUS:Listing directory: {path_str}"));
                         match Self::validate_sandbox_path(sandbox_path, path_str) {
                             Err(e) => serde_json::json!({ "error": e }).to_string(),
-                            Ok(full_path) => {
-                                match std::fs::read_dir(&full_path) {
-                                    Err(e) => serde_json::json!({ "error": e.to_string() }).to_string(),
-                                    Ok(entries) => {
-                                        let sandbox_canon = sandbox_path
-                                            .canonicalize()
-                                            .unwrap_or_else(|_| sandbox_path.to_path_buf());
-                                        let mut files: Vec<serde_json::Value> = entries
-                                            .filter_map(|e| e.ok())
-                                            .filter(|e| {
-                                                if let Some(ext) = ext_filter {
-                                                    e.path()
-                                                        .extension()
-                                                        .and_then(|s| s.to_str())
-                                                        .map(|s| format!(".{s}").eq_ignore_ascii_case(ext))
-                                                        .unwrap_or(false)
-                                                } else {
-                                                    true
-                                                }
-                                            })
-                                            .map(|e| {
-                                                let p = e.path();
-                                                let rel = p.strip_prefix(&sandbox_canon)
-                                                    .unwrap_or(&p)
-                                                    .to_string_lossy()
-                                                    .into_owned();
-                                                let kind = if p.is_dir() { "dir" } else { "file" };
-                                                serde_json::json!({ "name": rel, "kind": kind })
-                                            })
-                                            .collect();
-                                        files.sort_by_key(|v| v["name"].as_str().unwrap_or("").to_string());
-                                        serde_json::json!({ "entries": files }).to_string()
-                                    }
+                            Ok(full_path) => match std::fs::read_dir(&full_path) {
+                                Err(e) => serde_json::json!({ "error": e.to_string() }).to_string(),
+                                Ok(entries) => {
+                                    let sandbox_canon = sandbox_path
+                                        .canonicalize()
+                                        .unwrap_or_else(|_| sandbox_path.to_path_buf());
+                                    let mut files: Vec<serde_json::Value> = entries
+                                        .filter_map(|e| e.ok())
+                                        .filter(|e| {
+                                            if let Some(ext) = ext_filter {
+                                                e.path()
+                                                    .extension()
+                                                    .and_then(|s| s.to_str())
+                                                    .map(|s| {
+                                                        format!(".{s}").eq_ignore_ascii_case(ext)
+                                                    })
+                                                    .unwrap_or(false)
+                                            } else {
+                                                true
+                                            }
+                                        })
+                                        .map(|e| {
+                                            let p = e.path();
+                                            let rel = p
+                                                .strip_prefix(&sandbox_canon)
+                                                .unwrap_or(&p)
+                                                .to_string_lossy()
+                                                .into_owned();
+                                            let kind = if p.is_dir() { "dir" } else { "file" };
+                                            serde_json::json!({ "name": rel, "kind": kind })
+                                        })
+                                        .collect();
+                                    files.sort_by_key(|v| {
+                                        v["name"].as_str().unwrap_or("").to_string()
+                                    });
+                                    serde_json::json!({ "entries": files }).to_string()
                                 }
-                            }
+                            },
                         }
                     }
 
@@ -1194,17 +1274,22 @@ impl AgentRouter {
                                     let matches: Vec<serde_json::Value> = content
                                         .lines()
                                         .enumerate()
-                                        .filter(|(_, line)| line.to_lowercase().contains(&pat_lower))
-                                        .map(|(i, line)| serde_json::json!({
-                                            "line": i + 1,
-                                            "text": line
-                                        }))
+                                        .filter(|(_, line)| {
+                                            line.to_lowercase().contains(&pat_lower)
+                                        })
+                                        .map(|(i, line)| {
+                                            serde_json::json!({
+                                                "line": i + 1,
+                                                "text": line
+                                            })
+                                        })
                                         .collect();
                                     serde_json::json!({
                                         "pattern": pattern,
                                         "match_count": matches.len(),
                                         "matches": matches
-                                    }).to_string()
+                                    })
+                                    .to_string()
                                 }
                             },
                         }
@@ -1212,7 +1297,8 @@ impl AgentRouter {
 
                     unknown => serde_json::json!({
                         "error": format!("Unknown tool: {unknown}")
-                    }).to_string(),
+                    })
+                    .to_string(),
                 };
 
                 let _ = tx.send("\x01STATUS:".to_string());
