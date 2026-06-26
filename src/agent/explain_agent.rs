@@ -1,10 +1,11 @@
 use super::AgentRouter;
 use super::types::merge_tool_call_deltas;
 use super::types::{
-    ChatMessage, ChatRequest, ChatResponse, FunctionDefinition, StreamOptions, Tool, ToolCall,
-    Usage,
+    ChatMessage, ChatRequest, ChatResponse, FunctionDefinition, SharedWriteBuffer, StreamOptions,
+    Tool, ToolCall, Usage, WriteBuffer,
 };
 use std::path::Path;
+use std::sync::Arc;
 
 impl AgentRouter {
     /// Verify agent: reviews a draft answer and returns (passed, feedback).
@@ -160,7 +161,7 @@ impl AgentRouter {
 
             let (temp_tx, mut temp_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
             let real_tx_clone = tx.clone();
-            let write_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let write_buf: SharedWriteBuffer = Arc::new(WriteBuffer::new(Vec::new()));
             let write_buf_clone = write_buf.clone();
 
             let collect_handle = tokio::spawn(async move {
@@ -294,7 +295,7 @@ impl AgentRouter {
         gathered_data: &str,
         sandbox_path: &Path,
         tx: tokio::sync::mpsc::UnboundedSender<String>,
-        write_buffer: Option<std::sync::Arc<std::sync::Mutex<Vec<(std::path::PathBuf, String)>>>>,
+        write_buffer: Option<SharedWriteBuffer>,
     ) -> Result<(Option<Usage>, &'static str), String> {
         let (api_key, api_url, model_name_static) = if let Some(ref g) = self.glm {
             (

@@ -2,8 +2,12 @@ use super::AgentRouter;
 use super::types::merge_tool_call_deltas;
 use super::types::{
     ChatMessage, ChatRequest, FunctionDefinition, StreamOptions, Tool, ToolCall, Usage,
+    WriteBuffer, WriteBufferEntry,
 };
 use crate::memory::MemoryStore;
+use crate::path_safety::{
+    validate_and_resolve_write, validate_sandbox_path as resolve_sandbox_path, write_validated_path,
+};
 use std::path::Path;
 
 fn truncate_utf8_preview(content: &str, max_bytes: usize) -> &str {
@@ -25,74 +29,7 @@ impl AgentRouter {
         sandbox: &Path,
         user_path: &str,
     ) -> Result<std::path::PathBuf, String> {
-        let normalized = if std::path::Path::new(user_path).is_absolute() {
-            user_path.to_string()
-        } else {
-            user_path.trim_start_matches(['/', '\\']).to_string()
-        };
-
-        let candidate = if std::path::Path::new(&normalized).is_absolute() {
-            std::path::PathBuf::from(&normalized)
-        } else {
-            sandbox.join(&normalized)
-        };
-
-        let sandbox_canon = sandbox
-            .canonicalize()
-            .map_err(|e| format!("Sandbox path error: {e}"))?;
-
-        let clean_canon = |p: &Path| -> String {
-            let s = p.to_string_lossy().into_owned();
-            let s_stripped = if let Some(stripped) = s.strip_prefix(r"\\?\") {
-                stripped.to_string()
-            } else {
-                s
-            };
-            s_stripped.replace('\\', "/").to_lowercase()
-        };
-
-        let sandbox_canon_str = clean_canon(&sandbox_canon);
-
-        let mut existing = candidate.clone();
-        let mut suffix = std::path::PathBuf::new();
-        loop {
-            if existing.exists() {
-                break;
-            }
-            if let Some(parent) = existing.parent() {
-                if let Some(file_name) = existing.file_name() {
-                    suffix = std::path::Path::new(file_name).join(&suffix);
-                    existing = parent.to_path_buf();
-                } else {
-                    break;
-                }
-            } else {
-                break;
-            }
-        }
-
-        let canon_existing = existing
-            .canonicalize()
-            .map_err(|e| format!("Path resolution error: {e}"))?;
-        let resolved = if suffix.as_os_str().is_empty() {
-            canon_existing.clone()
-        } else {
-            canon_existing.join(&suffix)
-        };
-        let resolved_str = clean_canon(&resolved);
-
-        let is_sub = resolved_str == sandbox_canon_str
-            || (resolved_str.starts_with(&sandbox_canon_str)
-                && (sandbox_canon_str.ends_with('/')
-                    || resolved_str.chars().nth(sandbox_canon_str.chars().count()) == Some('/')));
-
-        if !is_sub {
-            return Err(format!(
-                "Access denied: '{}' is outside the sandbox directory",
-                user_path
-            ));
-        }
-        Ok(resolved)
+        resolve_sandbox_path(sandbox, user_path)
     }
 
     /// Phase 1 — silent read-only data retrieval (DB + files).
@@ -493,9 +430,9 @@ impl AgentRouter {
         sandbox: &Path,
         user_path: &str,
         content: &str,
-        buffer: Option<&std::sync::Mutex<Vec<(std::path::PathBuf, String)>>>,
+        buffer: Option<&WriteBuffer>,
     ) -> Result<std::path::PathBuf, String> {
-        let full_path = Self::validate_sandbox_path(sandbox, user_path)?;
+        let full_path = validate_and_resolve_write(sandbox, user_path)?;
         if let Some(buf) = buffer {
             if let Ok(mut lock) = buf.lock() {
                 lock.push((full_path.clone(), content.to_string()));
@@ -503,27 +440,15 @@ impl AgentRouter {
                 return Err("Failed to lock write buffer".to_string());
             }
         } else {
-            if let Some(parent) = full_path.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| format!("Failed to create directories: {e}"))?;
-            }
-            std::fs::write(&full_path, content)
-                .map_err(|e| format!("Failed to write file: {e}"))?;
+            write_validated_path(&full_path, content)?;
         }
         Ok(full_path)
     }
 
     /// Commits a list of buffered writes to disk.
-    pub(crate) fn commit_write_buffer(
-        &self,
-        buffer: &[(std::path::PathBuf, String)],
-    ) -> Result<(), String> {
+    pub(crate) fn commit_write_buffer(&self, buffer: &[WriteBufferEntry]) -> Result<(), String> {
         for (full_path, content) in buffer {
-            if let Some(parent) = full_path.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| format!("Failed to create directories: {e}"))?;
-            }
-            std::fs::write(full_path, content).map_err(|e| format!("Failed to write file: {e}"))?;
+            write_validated_path(full_path, content)?;
         }
         Ok(())
     }

@@ -1,4 +1,11 @@
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+
+/// A buffered sandbox file write (absolute path, content).
+pub type WriteBufferEntry = (PathBuf, String);
+pub type WriteBuffer = Mutex<Vec<WriteBufferEntry>>;
+pub type SharedWriteBuffer = Arc<WriteBuffer>;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ChatMessage {

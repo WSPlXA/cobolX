@@ -2,6 +2,7 @@ mod agent;
 mod cobol;
 mod config;
 mod memory;
+mod path_safety;
 mod ui;
 
 #[tokio::main]
