@@ -159,18 +159,24 @@ pub(crate) fn parse_source_file(path: &Path) -> std::io::Result<ParsedFile> {
             continue;
         }
 
-        if let Some((op, mut ids, mut lits)) =
-            parse_exec_sql(&tokens, line.start_offset, line.byte_len, current_program.clone())
-        {
+        if let Some((op, mut ids, mut lits)) = parse_exec_sql(
+            &tokens,
+            line.start_offset,
+            line.byte_len,
+            current_program.clone(),
+        ) {
             external_ops.push(op);
             identifiers.append(&mut ids);
             literals.append(&mut lits);
             continue;
         }
 
-        if let Some((op, mut lits)) =
-            parse_exec_cics(&tokens, line.start_offset, line.byte_len, current_program.clone())
-        {
+        if let Some((op, mut lits)) = parse_exec_cics(
+            &tokens,
+            line.start_offset,
+            line.byte_len,
+            current_program.clone(),
+        ) {
             external_ops.push(op);
             literals.append(&mut lits);
             continue;
@@ -297,7 +303,12 @@ fn parse_exec_sql(
 
     let verb = tokens[2..]
         .iter()
-        .find(|t| matches!(t.text.as_str(), "SELECT" | "INSERT" | "UPDATE" | "DELETE" | "MERGE"))
+        .find(|t| {
+            matches!(
+                t.text.as_str(),
+                "SELECT" | "INSERT" | "UPDATE" | "DELETE" | "MERGE"
+            )
+        })
         .map(|t| t.text.clone())
         .unwrap_or_else(|| "SQL".to_string());
     let target = extract_sql_target(tokens, &verb);
@@ -341,8 +352,9 @@ fn extract_sql_target(tokens: &[Token], verb: &str) -> Option<String> {
         "INSERT" => token_after_keyword(tokens, "INTO"),
         "UPDATE" => token_after_keyword(tokens, "UPDATE"),
         "DELETE" => token_after_keyword(tokens, "FROM"),
-        "MERGE" => token_after_keyword(tokens, "INTO")
-            .or_else(|| token_after_keyword(tokens, "USING")),
+        "MERGE" => {
+            token_after_keyword(tokens, "INTO").or_else(|| token_after_keyword(tokens, "USING"))
+        }
         _ => None,
     }
 }
@@ -395,9 +407,9 @@ fn parse_exec_cics(
 fn parse_file_io(tokens: &[Token]) -> Option<(String, String)> {
     match tokens.first()?.text.as_str() {
         "OPEN" => {
-            let mode_idx = tokens.iter().position(|t| {
-                matches!(t.text.as_str(), "INPUT" | "OUTPUT" | "I-O" | "EXTEND")
-            })?;
+            let mode_idx = tokens
+                .iter()
+                .position(|t| matches!(t.text.as_str(), "INPUT" | "OUTPUT" | "I-O" | "EXTEND"))?;
             let target = tokens.get(mode_idx + 1).map(|t| clean_name(&t.text))?;
             (!target.is_empty()).then_some(("OPEN".to_string(), target))
         }

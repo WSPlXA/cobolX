@@ -244,11 +244,9 @@ mod tests {
         assert!(tool.function.description.contains("SELECT"));
         assert!(tool.function.description.contains("read-only"));
         assert!(
-            tool.function
-                .description
-                .contains(
-                    "files, programs, data_items, call_edges, copybook_uses, program_features"
-                )
+            tool.function.description.contains(
+                "files, programs, data_items, call_edges, copybook_uses, program_features"
+            )
         );
     }
 }

@@ -2,10 +2,10 @@ use crate::cobol::copybook::{build_copybook_index, resolve_copybook};
 use crate::cobol::data_parser::collect_data_items;
 use crate::cobol::layout::compute_physical_layout;
 use crate::cobol::lexer::clean_name;
+use crate::cobol::model::ParsedCodeBlock;
 pub use crate::cobol::model::{
     CallKind, CallSummary, CopybookSummary, IndexReport, ProgramSummary,
 };
-use crate::cobol::model::ParsedCodeBlock;
 use crate::cobol::scanner::{CobolFileType, scan_sandbox};
 use crate::cobol::source_parser::parse_source_file;
 use crate::memory::MemoryStore;
@@ -254,7 +254,11 @@ pub fn index_sandbox(root: &Path, store: &mut MemoryStore) -> IndexResult<IndexR
         }
 
         for code_block in &file.code_blocks {
-            let Some(program_id) = resolve_program_id(&program_ids, code_block.caller_name.as_deref(), default_program) else {
+            let Some(program_id) = resolve_program_id(
+                &program_ids,
+                code_block.caller_name.as_deref(),
+                default_program,
+            ) else {
                 continue;
             };
             tx.execute(
@@ -271,7 +275,10 @@ pub fn index_sandbox(root: &Path, store: &mut MemoryStore) -> IndexResult<IndexR
                     code_block.byte_len as i64,
                 ],
             )?;
-            if matches!(code_block.kind, crate::cobol::model::CodeBlockKind::Paragraph) {
+            if matches!(
+                code_block.kind,
+                crate::cobol::model::CodeBlockKind::Paragraph
+            ) {
                 increment_count(&mut paragraph_count_by_program, program_id);
             }
         }
@@ -363,7 +370,9 @@ pub fn index_sandbox(root: &Path, store: &mut MemoryStore) -> IndexResult<IndexR
 
             increment_count(&mut outgoing_calls, caller_program_id);
             match call.kind {
-                CallKind::Static => increment_count(&mut static_calls_by_program, caller_program_id),
+                CallKind::Static => {
+                    increment_count(&mut static_calls_by_program, caller_program_id)
+                }
                 CallKind::Dynamic => {
                     increment_count(&mut dynamic_calls_by_program, caller_program_id)
                 }
@@ -466,7 +475,10 @@ pub fn index_sandbox(root: &Path, store: &mut MemoryStore) -> IndexResult<IndexR
             continue;
         };
         let incoming = incoming_calls.get(&program_id).copied().unwrap_or(0);
-        let copybook_use_count = copybook_use_count_by_program.get(&program_id).copied().unwrap_or(0);
+        let copybook_use_count = copybook_use_count_by_program
+            .get(&program_id)
+            .copied()
+            .unwrap_or(0);
         tx.execute(
             "INSERT INTO program_features(program_id, source_file_id, incoming_call_count, outgoing_call_count, static_call_count, dynamic_call_count, copybook_use_count, distinct_copybook_count, referenced_by_file_count, is_entrypoint, has_heavy_copy_usage, data_item_count, paragraph_count, external_op_count, identifier_count, literal_count) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             params![

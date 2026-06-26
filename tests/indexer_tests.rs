@@ -436,41 +436,13 @@ fn init_indexer_persists_richer_semantic_index_data() {
         "LINK".to_string(),
         Some("ERRHNDL".to_string())
     )));
-    assert!(identifiers.contains(&(
-        "sql_table".to_string(),
-        "CUSTOMER_TABLE".to_string(),
-        1
-    )));
-    assert!(identifiers.contains(&(
-        "file_name".to_string(),
-        "CUSTOMER-FILE".to_string(),
-        3
-    )));
-    assert!(identifiers.contains(&(
-        "paragraph_name".to_string(),
-        "HANDLE-ERROR".to_string(),
-        1
-    )));
-    assert!(identifiers.contains(&(
-        "data_name".to_string(),
-        "ERR-CODE".to_string(),
-        1
-    )));
-    assert!(literals.contains(&(
-        "call_target".to_string(),
-        "SUB001".to_string(),
-        1
-    )));
-    assert!(literals.contains(&(
-        "exec_cics_program".to_string(),
-        "ERRHNDL".to_string(),
-        1
-    )));
-    assert!(literals.contains(&(
-        "string_literal".to_string(),
-        "ER".to_string(),
-        1
-    )));
+    assert!(identifiers.contains(&("sql_table".to_string(), "CUSTOMER_TABLE".to_string(), 1)));
+    assert!(identifiers.contains(&("file_name".to_string(), "CUSTOMER-FILE".to_string(), 3)));
+    assert!(identifiers.contains(&("paragraph_name".to_string(), "HANDLE-ERROR".to_string(), 1)));
+    assert!(identifiers.contains(&("data_name".to_string(), "ERR-CODE".to_string(), 1)));
+    assert!(literals.contains(&("call_target".to_string(), "SUB001".to_string(), 1)));
+    assert!(literals.contains(&("exec_cics_program".to_string(), "ERRHNDL".to_string(), 1)));
+    assert!(literals.contains(&("string_literal".to_string(), "ER".to_string(), 1)));
     assert_eq!(
         copybook_features,
         vec![
