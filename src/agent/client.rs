@@ -224,11 +224,7 @@ impl AgentRouter {
         _sandbox_path: Option<&Path>,
     ) -> Result<(String, &'static str), String> {
         let (agents, memory_summary) = Self::load_prompt_memory(_sandbox_path);
-        let messages = Self::build_messages(
-            history,
-            agents.as_deref(),
-            memory_summary.as_deref(),
-        );
+        let messages = Self::build_messages(history, agents.as_deref(), memory_summary.as_deref());
         match route {
             Route::Light => {
                 if let Some(ref ds) = self.deepseek {
@@ -266,11 +262,7 @@ impl AgentRouter {
         tx: tokio::sync::mpsc::UnboundedSender<String>,
     ) -> Result<(Option<Usage>, &'static str), String> {
         let (agents, memory_summary) = Self::load_prompt_memory(sandbox_path);
-        let messages = Self::build_messages(
-            history,
-            agents.as_deref(),
-            memory_summary.as_deref(),
-        );
+        let messages = Self::build_messages(history, agents.as_deref(), memory_summary.as_deref());
         match route {
             Route::Light => {
                 if let Some(ref ds) = self.deepseek {

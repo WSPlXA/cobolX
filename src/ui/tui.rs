@@ -2,13 +2,13 @@ use crate::agent::client::AgentRouter;
 use crate::memory::{RunJournal, TOKEN_SUMMARY_THRESHOLD};
 use crate::ui::draw;
 use chrono::Local;
-use serde_json::json;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
+use serde_json::json;
 use std::io;
 use std::sync::Arc;
 
@@ -54,7 +54,10 @@ pub enum TaskUpdate {
         Result<Option<crate::agent::client::Usage>, String>,
         &'static str,
     ),
-    MemorySummarized { ok: bool, detail: String },
+    MemorySummarized {
+        ok: bool,
+        detail: String,
+    },
 }
 
 pub struct App {
@@ -370,10 +373,7 @@ impl App {
                                     }
                                 }
                                 Err(e) => {
-                                    self.log_run(
-                                        "index_failed",
-                                        json!({ "error": e.to_string() }),
-                                    );
+                                    self.log_run("index_failed", json!({ "error": e.to_string() }));
                                     self.messages.push(Message {
                                         sender: Sender::Cobolx,
                                         text: format!("Error indexing sandbox: {}", e),
@@ -780,8 +780,8 @@ fn spawn_memory_consolidation(
         ));
         let result: Result<(), String> = async {
             let sandbox = sandbox.ok_or("No sandbox path for memory consolidation.")?;
-            let store = crate::memory::MemoryStore::open_or_create(&sandbox)
-                .map_err(|e| e.to_string())?;
+            let store =
+                crate::memory::MemoryStore::open_or_create(&sandbox).map_err(|e| e.to_string())?;
             let mem = store.codex_memories();
             let summary = mem.read_memory_summary().map_err(|e| e.to_string())?;
             let handbook = mem.read_memory_handbook().map_err(|e| e.to_string())?;
@@ -798,9 +798,7 @@ fn spawn_memory_consolidation(
             Ok(()) => {
                 let _ = tx.send(TaskUpdate::MemorySummarized {
                     ok: true,
-                    detail: format!(
-                        "~{tokens_summarized} tokens → memory_summary.md + MEMORY.md"
-                    ),
+                    detail: format!("~{tokens_summarized} tokens → memory_summary.md + MEMORY.md"),
                 });
             }
             Err(err) => {
@@ -976,10 +974,7 @@ pub fn run_tui() -> Result<(), io::Error> {
                     }
                 }
                 TaskUpdate::MemorySummarized { ok, detail } => {
-                    app.log_run(
-                        "memory_summarized",
-                        json!({ "ok": ok, "detail": detail }),
-                    );
+                    app.log_run("memory_summarized", json!({ "ok": ok, "detail": detail }));
                     if ok {
                         app.messages.push(Message {
                             sender: Sender::Cobolx,

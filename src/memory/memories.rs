@@ -29,9 +29,10 @@ pub struct CodexMemories {
 impl CodexMemories {
     pub fn for_project(base_dir: &Path, project_root: &Path) -> Self {
         let memories_dir = base_dir.join("memories");
+        let rollout_summaries_dir = memories_dir.join("rollout_summaries");
         Self {
             memories_dir,
-            rollout_summaries_dir: memories_dir.join("rollout_summaries"),
+            rollout_summaries_dir,
             project_root: project_root.to_path_buf(),
             legacy_summary_path: base_dir.join(LEGACY_SUMMARY_FILE),
         }
@@ -167,10 +168,7 @@ fn truncate_utf8_prefix(content: &str, max_bytes: usize) -> String {
     while end > 0 && !content.is_char_boundary(end) {
         end -= 1;
     }
-    format!(
-        "{}…\n\n[truncated for context budget]",
-        &content[..end]
-    )
+    format!("{}…\n\n[truncated for context budget]", &content[..end])
 }
 
 #[cfg(test)]
@@ -188,19 +186,20 @@ mod tests {
         assert!(mem.memories_dir().join(MEMORY_SUMMARY_FILE).exists());
         assert!(mem.memories_dir().join(MEMORY_HANDBOOK_FILE).exists());
 
-        mem.write_rollout_summary("20250626T120000", "# rollout recap\n").unwrap();
-        assert!(mem
-            .rollout_summaries_dir()
-            .join("20250626T120000.md")
-            .exists());
+        mem.write_rollout_summary("20250626T120000", "# rollout recap\n")
+            .unwrap();
+        assert!(
+            mem.rollout_summaries_dir()
+                .join("20250626T120000.md")
+                .exists()
+        );
     }
 
     #[test]
     fn parses_consolidation_markers() {
         let out = format!(
             "preamble\n{}\nsummary body\n{}\nhandbook body",
-            CONSOLIDATION_SUMMARY_MARKER,
-            CONSOLIDATION_HANDBOOK_MARKER
+            CONSOLIDATION_SUMMARY_MARKER, CONSOLIDATION_HANDBOOK_MARKER
         );
         let (s, h) = CodexMemories::parse_consolidation_output(&out).unwrap();
         assert_eq!(s, "summary body");

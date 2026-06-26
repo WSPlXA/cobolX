@@ -8,4 +8,4 @@ pub use memories::{
     TOKEN_SUMMARY_THRESHOLD,
 };
 pub use runs::RunJournal;
-pub use store::{MemoryPaths, MemoryStore};
+pub use store::MemoryStore;
