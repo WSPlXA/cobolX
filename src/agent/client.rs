@@ -3,8 +3,11 @@ use super::clients::{DeepSeekClient, GlmClient};
 // Re-exports — tui.rs and other in-crate code uses `use crate::agent::client::{...}`
 pub use super::types::{ChatMessage, Route, Usage};
 use crate::config::ConfigManager;
+use crate::memory::{CodexMemories, MemoryStore};
 use crate::ui::tui::{Message, Sender};
 use std::path::Path;
+
+const SUMMARY_LOG_MAX_BYTES: usize = 12_000;
 
 pub struct AgentRouter {
     pub(crate) deepseek: Option<DeepSeekClient>,
@@ -91,14 +94,44 @@ impl AgentRouter {
         }
     }
 
-    fn build_messages(history: &[Message]) -> Vec<ChatMessage> {
+    fn load_prompt_memory(sandbox_path: Option<&Path>) -> (Option<String>, Option<String>) {
+        match sandbox_path {
+            None => (None, None),
+            Some(p) => MemoryStore::open_or_create(p)
+                .ok()
+                .map(|store| {
+                    let mem = store.codex_memories();
+                    let agents = mem.read_agents_instructions();
+                    let summary = mem.read_memory_summary_for_injection().ok();
+                    (agents, summary)
+                })
+                .unwrap_or((None, None)),
+        }
+    }
+
+    fn build_messages(
+        history: &[Message],
+        agents_instructions: Option<&str>,
+        memory_summary: Option<&str>,
+    ) -> Vec<ChatMessage> {
+        let mut system_text = String::from(
+            "You are COBOLX, a helpful assistant. COBOLX is a migration agent for legacy \
+            COBOL systems based on DeepSeek.",
+        );
+        if let Some(agents) = agents_instructions {
+            system_text.push_str("\n\n## Project instructions (AGENTS.md)\n\n");
+            system_text.push_str(agents);
+        }
+        if let Some(summary) = memory_summary {
+            system_text.push_str(
+                "\n\n## Persisted memory summary (memory_summary.md)\n\
+                Codex-style navigational memory for continuity:\n\n",
+            );
+            system_text.push_str(summary);
+        }
         let mut messages = vec![ChatMessage {
             role: "system".to_string(),
-            content: Some(
-                "You are COBOLX, a helpful assistant. COBOLX is a migration agent for legacy \
-                COBOL systems based on DeepSeek."
-                    .to_string(),
-            ),
+            content: Some(system_text),
             tool_call_id: None,
             tool_calls: None,
         }];
@@ -130,6 +163,59 @@ impl AgentRouter {
         messages
     }
 
+    /// Codex Phase 2: consolidate rollout log into `memory_summary.md` + `MEMORY.md`.
+    pub async fn consolidate_codex_memories(
+        &self,
+        memory_summary: &str,
+        memory_handbook: &str,
+        rollout_log: &str,
+        tokens_summarized: u32,
+    ) -> Result<(String, String), String> {
+        let truncated_log = truncate_utf8_tail(rollout_log, SUMMARY_LOG_MAX_BYTES);
+        let system_msg = ChatMessage {
+            role: "system".to_string(),
+            content: Some(
+                "You are the COBOLX memory consolidation agent (Codex Phase 2). \
+                Merge existing memory with a new rollout log. Output ONLY two markdown \
+                documents separated by exact markers:\n\
+                ---COBOLX_MEMORY_SUMMARY---\n\
+                (short navigational summary, like Codex memory_summary.md)\n\
+                ---COBOLX_MEMORY_HANDBOOK---\n\
+                (long-form handbook, like Codex MEMORY.md)\n\
+                Include last_updated (ISO8601 UTC) and tokens_summarized (cumulative) in the summary. \
+                Be concise. Preserve useful manual edits. Focus on COBOL programs, user goals, \
+                sandbox facts, and decisions."
+                    .to_string(),
+            ),
+            tool_call_id: None,
+            tool_calls: None,
+        };
+        let user_msg = ChatMessage {
+            role: "user".to_string(),
+            content: Some(format!(
+                "tokens_to_add: {}\n\n\
+                 Existing memory_summary.md:\n\n{}\n\n---\n\n\
+                 Existing MEMORY.md:\n\n{}\n\n---\n\n\
+                 New rollout log:\n\n{}",
+                tokens_summarized, memory_summary, memory_handbook, truncated_log
+            )),
+            tool_call_id: None,
+            tool_calls: None,
+        };
+        let messages = vec![system_msg, user_msg];
+
+        let output = if let Some(ref ds) = self.deepseek {
+            ds.call_api(&messages, Some(0.2)).await?
+        } else if let Some(ref g) = self.glm {
+            g.call_api(&messages, Some(0.2)).await?
+        } else {
+            return Err("No API client available for memory consolidation.".to_string());
+        };
+
+        CodexMemories::parse_consolidation_output(&output)
+            .ok_or_else(|| "Consolidation output missing required markers.".to_string())
+    }
+
     #[allow(dead_code)]
     pub async fn execute_chat(
         &self,
@@ -137,7 +223,12 @@ impl AgentRouter {
         route: Route,
         _sandbox_path: Option<&Path>,
     ) -> Result<(String, &'static str), String> {
-        let messages = Self::build_messages(history);
+        let (agents, memory_summary) = Self::load_prompt_memory(_sandbox_path);
+        let messages = Self::build_messages(
+            history,
+            agents.as_deref(),
+            memory_summary.as_deref(),
+        );
         match route {
             Route::Light => {
                 if let Some(ref ds) = self.deepseek {
@@ -174,7 +265,12 @@ impl AgentRouter {
         sandbox_path: Option<&Path>,
         tx: tokio::sync::mpsc::UnboundedSender<String>,
     ) -> Result<(Option<Usage>, &'static str), String> {
-        let messages = Self::build_messages(history);
+        let (agents, memory_summary) = Self::load_prompt_memory(sandbox_path);
+        let messages = Self::build_messages(
+            history,
+            agents.as_deref(),
+            memory_summary.as_deref(),
+        );
         match route {
             Route::Light => {
                 if let Some(ref ds) = self.deepseek {
@@ -246,6 +342,17 @@ impl AgentRouter {
             }
         }
     }
+}
+
+fn truncate_utf8_tail(content: &str, max_bytes: usize) -> &str {
+    if content.len() <= max_bytes {
+        return content;
+    }
+    let mut start = content.len() - max_bytes;
+    while start < content.len() && !content.is_char_boundary(start) {
+        start += 1;
+    }
+    &content[start..]
 }
 
 #[cfg(test)]

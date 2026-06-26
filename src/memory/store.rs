@@ -2,6 +2,8 @@ use rusqlite::{Connection, OpenFlags};
 use std::error::Error;
 use std::path::{Path, PathBuf};
 
+use super::memories::CodexMemories;
+
 type StoreResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
 #[allow(dead_code)]
@@ -73,6 +75,14 @@ impl MemoryStore {
 
     pub fn skills_dir(&self) -> &Path {
         &self.paths.skills_dir
+    }
+
+    pub fn runs_dir(&self) -> &Path {
+        &self.paths.runs_dir
+    }
+
+    pub fn codex_memories(&self) -> CodexMemories {
+        CodexMemories::for_project(&self.paths.base_dir, &self.paths.root)
     }
 
     pub fn connection(&self) -> &Connection {
@@ -148,6 +158,8 @@ fn create_dirs(paths: &MemoryPaths) -> StoreResult<()> {
     std::fs::create_dir_all(&paths.docs_dir)?;
     std::fs::create_dir_all(&paths.runs_dir)?;
     std::fs::create_dir_all(&paths.skills_dir)?;
+    let memories = CodexMemories::for_project(&paths.base_dir, &paths.root);
+    memories.ensure_layout()?;
     Ok(())
 }
 

@@ -1,6 +1,8 @@
 use crate::agent::client::AgentRouter;
+use crate::memory::{RunJournal, TOKEN_SUMMARY_THRESHOLD};
 use crate::ui::draw;
 use chrono::Local;
+use serde_json::json;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
@@ -52,6 +54,7 @@ pub enum TaskUpdate {
         Result<Option<crate::agent::client::Usage>, String>,
         &'static str,
     ),
+    MemorySummarized { ok: bool, detail: String },
 }
 
 pub struct App {
@@ -80,6 +83,8 @@ pub struct App {
     pub spinner_tick: usize,
     pub console_scroll_offset: u16,
     pub custom_prompt_override: Option<String>,
+    pub run_journal: Option<RunJournal>,
+    pub tokens_since_summary: u32,
 }
 
 impl App {
@@ -142,6 +147,38 @@ impl App {
             spinner_tick: 0,
             console_scroll_offset: 0,
             custom_prompt_override: None,
+            run_journal: None,
+            tokens_since_summary: 0,
+        }
+    }
+
+    fn start_run_journal(&mut self, sandbox: &std::path::Path) {
+        if let Ok(store) = crate::memory::MemoryStore::open_or_create(sandbox) {
+            let _ = store.codex_memories().ensure_layout();
+            if let Ok(journal) = RunJournal::start(store.runs_dir()) {
+                self.run_journal = Some(journal);
+            }
+        }
+    }
+
+    fn log_run(&mut self, kind: &str, payload: serde_json::Value) {
+        if let Some(journal) = &mut self.run_journal {
+            journal.log(kind, payload);
+        }
+    }
+
+    fn finish_run_journal(&mut self, status: &str) {
+        if let Some(journal) = &self.run_journal {
+            journal.finish(status);
+            if let Some(sandbox) = &self.sandbox_path {
+                if let Ok(store) = crate::memory::MemoryStore::open_or_create(sandbox) {
+                    let mem = store.codex_memories();
+                    if let Ok(log) = journal.read_log() {
+                        let _ = mem.write_rollout_summary(journal.run_id(), &log);
+                        let _ = mem.write_raw_memories(&log);
+                    }
+                }
+            }
         }
     }
 
@@ -235,6 +272,14 @@ impl App {
             timestamp: Local::now().format("%H:%M:%S").to_string(),
         });
 
+        self.log_run(
+            "user_message",
+            json!({
+                "text": text,
+                "is_command": text.starts_with('/'),
+            }),
+        );
+
         let mut should_exit = false;
         let mut is_command = false;
 
@@ -246,6 +291,7 @@ impl App {
                 let cmd = parts[0][1..].to_lowercase();
                 match cmd.as_str() {
                     "exit" | "quit" => {
+                        self.log_run("session_exit", json!({ "reason": "user_command" }));
                         should_exit = true;
                     }
                     "clear" => {
@@ -302,6 +348,13 @@ impl App {
                             ) {
                                 Ok((report, db_path)) => {
                                     self.discovered_files = report.files.clone();
+                                    self.log_run(
+                                        "index_completed",
+                                        json!({
+                                            "file_count": report.files.len(),
+                                            "db_path": db_path.to_string_lossy(),
+                                        }),
+                                    );
                                     if self.discovered_files.is_empty() {
                                         self.messages.push(Message {
                                             sender: Sender::Cobolx,
@@ -317,6 +370,10 @@ impl App {
                                     }
                                 }
                                 Err(e) => {
+                                    self.log_run(
+                                        "index_failed",
+                                        json!({ "error": e.to_string() }),
+                                    );
                                     self.messages.push(Message {
                                         sender: Sender::Cobolx,
                                         text: format!("Error indexing sandbox: {}", e),
@@ -703,6 +760,68 @@ fn trigger_chat_task(app: &mut App, tx: &tokio::sync::mpsc::UnboundedSender<Task
     false
 }
 
+fn spawn_memory_consolidation(
+    app: &App,
+    tx: &tokio::sync::mpsc::UnboundedSender<TaskUpdate>,
+    tokens_summarized: u32,
+) {
+    let sandbox = app.sandbox_path.clone();
+    let router = Arc::clone(&app.router);
+    let run_log = app
+        .run_journal
+        .as_ref()
+        .and_then(|j| j.read_log().ok())
+        .unwrap_or_default();
+    let tx = tx.clone();
+
+    tokio::spawn(async move {
+        let _ = tx.send(TaskUpdate::Status(
+            "Consolidating memories (Codex Phase 2)...".to_string(),
+        ));
+        let result: Result<(), String> = async {
+            let sandbox = sandbox.ok_or("No sandbox path for memory consolidation.")?;
+            let store = crate::memory::MemoryStore::open_or_create(&sandbox)
+                .map_err(|e| e.to_string())?;
+            let mem = store.codex_memories();
+            let summary = mem.read_memory_summary().map_err(|e| e.to_string())?;
+            let handbook = mem.read_memory_handbook().map_err(|e| e.to_string())?;
+            let (new_summary, new_handbook) = router
+                .consolidate_codex_memories(&summary, &handbook, &run_log, tokens_summarized)
+                .await?;
+            mem.write_consolidated(&new_summary, &new_handbook)
+                .map_err(|e| e.to_string())?;
+            Ok(())
+        }
+        .await;
+        let _ = tx.send(TaskUpdate::Status("".to_string()));
+        match result {
+            Ok(()) => {
+                let _ = tx.send(TaskUpdate::MemorySummarized {
+                    ok: true,
+                    detail: format!(
+                        "~{tokens_summarized} tokens → memory_summary.md + MEMORY.md"
+                    ),
+                });
+            }
+            Err(err) => {
+                let _ = tx.send(TaskUpdate::MemorySummarized {
+                    ok: false,
+                    detail: err,
+                });
+            }
+        }
+    });
+}
+
+fn route_label(route: &crate::agent::client::Route) -> &'static str {
+    match route {
+        crate::agent::client::Route::Light => "LIGHT",
+        crate::agent::client::Route::Heavy => "HEAVY",
+        crate::agent::client::Route::Database => "DATABASE",
+        crate::agent::client::Route::Filesystem => "FILESYSTEM",
+    }
+}
+
 pub fn run_tui() -> Result<(), io::Error> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -718,6 +837,13 @@ pub fn run_tui() -> Result<(), io::Error> {
         while let Ok(update) = rx.try_recv() {
             match update {
                 TaskUpdate::Routed(ref route, model_used) => {
+                    app.log_run(
+                        "route_selected",
+                        json!({
+                            "route": route_label(route),
+                            "model": model_used,
+                        }),
+                    );
                     app.active_agent = Some(model_used.to_string());
                     if matches!(
                         route,
@@ -769,6 +895,9 @@ pub fn run_tui() -> Result<(), io::Error> {
                     }
                 }
                 TaskUpdate::Status(status) => {
+                    if !status.is_empty() {
+                        app.log_run("agent_status", json!({ "status": status }));
+                    }
                     if status.is_empty() {
                         app.agent_status = None;
                     } else {
@@ -776,6 +905,25 @@ pub fn run_tui() -> Result<(), io::Error> {
                     }
                 }
                 TaskUpdate::Finished(res, model_used) => {
+                    let payload = match &res {
+                        Ok(Some(usage)) => json!({
+                            "model": model_used,
+                            "ok": true,
+                            "prompt_tokens": usage.prompt_tokens,
+                            "completion_tokens": usage.completion_tokens,
+                            "total_tokens": usage.total_tokens,
+                        }),
+                        Ok(None) => json!({
+                            "model": model_used,
+                            "ok": true,
+                        }),
+                        Err(err) => json!({
+                            "model": model_used,
+                            "ok": false,
+                            "error": err,
+                        }),
+                    };
+                    app.log_run("agent_finished", payload);
                     app.active_agent = None;
                     app.agent_status = None;
                     if let Some(msg) = app.messages.iter_mut().last() {
@@ -802,6 +950,13 @@ pub fn run_tui() -> Result<(), io::Error> {
                                 app.glm_prompt_tokens += usage.prompt_tokens;
                                 app.glm_completion_tokens += usage.completion_tokens;
                             }
+
+                            app.tokens_since_summary += usage.total_tokens;
+                            if app.tokens_since_summary >= TOKEN_SUMMARY_THRESHOLD {
+                                let tokens_batch = app.tokens_since_summary;
+                                app.tokens_since_summary = 0;
+                                spawn_memory_consolidation(&app, &tx, tokens_batch);
+                            }
                         }
                         Ok(None) => {
                             app.last_model = Some(model_used.to_string());
@@ -818,6 +973,19 @@ pub fn run_tui() -> Result<(), io::Error> {
                                 }
                             }
                         }
+                    }
+                }
+                TaskUpdate::MemorySummarized { ok, detail } => {
+                    app.log_run(
+                        "memory_summarized",
+                        json!({ "ok": ok, "detail": detail }),
+                    );
+                    if ok {
+                        app.messages.push(Message {
+                            sender: Sender::Cobolx,
+                            text: format!("Memory consolidated ({detail})."),
+                            timestamp: Local::now().format("%H:%M:%S").to_string(),
+                        });
                     }
                 }
             }
@@ -928,7 +1096,12 @@ pub fn run_tui() -> Result<(), io::Error> {
                                     .and_then(|p| p.parent().map(|parent| parent.to_path_buf()))
                             };
                             if let Some(path) = resolved {
+                                app.start_run_journal(&path);
                                 app.sandbox_path = Some(path.clone());
+                                app.log_run(
+                                    "sandbox_selected",
+                                    json!({ "path": path.to_string_lossy() }),
+                                );
                                 app.view_mode = ViewMode::Chat;
                                 app.messages.push(Message {
                                     sender: Sender::Cobolx,
@@ -1047,6 +1220,8 @@ pub fn run_tui() -> Result<(), io::Error> {
             }
         }
     }
+
+    app.finish_run_journal("completed");
 
     disable_raw_mode()?;
     execute!(
