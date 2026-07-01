@@ -158,6 +158,9 @@ fn create_dirs(paths: &MemoryPaths) -> StoreResult<()> {
     std::fs::create_dir_all(&paths.docs_dir)?;
     std::fs::create_dir_all(&paths.runs_dir)?;
     std::fs::create_dir_all(&paths.skills_dir)?;
+    for dir in crate::agent::skills::AGENT_SKILL_DIRS {
+        std::fs::create_dir_all(paths.skills_dir.join(dir))?;
+    }
     let memories = CodexMemories::for_project(&paths.base_dir, &paths.root);
     memories.ensure_layout()?;
     Ok(())

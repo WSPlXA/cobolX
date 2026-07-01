@@ -1,4 +1,5 @@
 use super::AgentRouter;
+use super::skills::{AgentKind, append_agent_skills};
 use super::types::merge_tool_call_deltas;
 use super::types::{
     ChatMessage, ChatRequest, FunctionDefinition, StreamOptions, Tool, ToolCall, Usage,
@@ -55,7 +56,7 @@ impl AgentRouter {
 
         if let Some(first_msg) = messages.get_mut(0) {
             if first_msg.role == "system" {
-                first_msg.content = Some(
+                let mut system_prompt =
                     "You are the COBOLX Database Sub-Agent. Your task is to help the user analyze \
                     their COBOL codebase by querying the local SQLite database. You have access to \
                     the `query_sqlite` tool to execute read-only SELECT queries.\n\
@@ -90,8 +91,9 @@ impl AgentRouter {
                     - Write standard SELECT queries only (read-only).\n\
                     - If unsure about columns, query the schema first.\n\
                     - Explain answers clearly; if no data matches, say so."
-                        .to_string(),
-                );
+                        .to_string();
+                append_agent_skills(&mut system_prompt, sandbox_path, AgentKind::Database)?;
+                first_msg.content = Some(system_prompt);
             }
         }
 

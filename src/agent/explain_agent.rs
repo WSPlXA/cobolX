@@ -1,4 +1,5 @@
 use super::AgentRouter;
+use super::skills::{AgentKind, append_agent_skills};
 use super::types::merge_tool_call_deltas;
 use super::types::{
     ChatMessage, ChatRequest, ChatResponse, FunctionDefinition, SharedWriteBuffer, StreamOptions,
@@ -14,6 +15,7 @@ impl AgentRouter {
         user_question: &str,
         gathered_data: &str,
         draft_content: &str,
+        sandbox_path: &Path,
     ) -> Result<(bool, String), String> {
         let (api_key, api_url, model_name) = if let Some(ref g) = self.glm {
             (
@@ -31,7 +33,7 @@ impl AgentRouter {
             return Err("No API client for Verify Agent.".to_string());
         };
 
-        let system_prompt = "You are the COBOLX Verify Agent. Review the draft answer.\n\
+        let mut system_prompt = "You are the COBOLX Verify Agent. Review the draft answer.\n\
             Look for:\n\
             1. Incomplete paragraphs, missing values, TODOs, incorrect analysis, grammar/logic issues.\n\
             2. Missing files/variables the user asked about.\n\
@@ -39,6 +41,7 @@ impl AgentRouter {
             Return a JSON object ONLY (no markdown wrapping):\n\
             { \"passed\": bool, \"feedback\": \"...\" }"
             .to_string();
+        append_agent_skills(&mut system_prompt, sandbox_path, AgentKind::Verify)?;
 
         let user_prompt = format!(
             "User Question:\n{}\n\nGathered Data:\n{}\n\nDraft Answer:\n{}",
@@ -204,7 +207,12 @@ impl AgentRouter {
 
             let _ = tx.send("\x01STATUS:Verify Agent: Reviewing draft...".to_string());
             match self
-                .run_verify_agent(&user_question, gathered_data, &accumulated_text)
+                .run_verify_agent(
+                    &user_question,
+                    gathered_data,
+                    &accumulated_text,
+                    sandbox_path,
+                )
                 .await
             {
                 Ok((passed, feedback)) => {
@@ -328,7 +336,7 @@ impl AgentRouter {
             .unwrap_or("")
             .to_string();
 
-        let system_prompt = format!(
+        let mut system_prompt = format!(
             "You are COBOLX, an expert COBOL systems analyst and legacy migration specialist.\n\
             A retrieval agent has already gathered this structured data from the COBOL project:\n\n\
             ---\n{gathered_data}\n---\n\n\
@@ -340,6 +348,7 @@ impl AgentRouter {
             Sandbox root for write_file: {sandbox_display}",
             sandbox_display = sandbox_path.to_string_lossy()
         );
+        append_agent_skills(&mut system_prompt, sandbox_path, AgentKind::Explain)?;
 
         let mut messages = vec![
             ChatMessage {

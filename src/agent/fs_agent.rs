@@ -1,4 +1,5 @@
 use super::AgentRouter;
+use super::skills::{AgentKind, append_agent_skills};
 use super::types::merge_tool_call_deltas;
 use super::types::{
     ChatMessage, ChatRequest, FunctionDefinition, StreamOptions, Tool, ToolCall, Usage,
@@ -63,7 +64,7 @@ impl AgentRouter {
 
         if let Some(first_msg) = messages.get_mut(0) {
             if first_msg.role == "system" {
-                first_msg.content = Some(format!(
+                let mut system_prompt = format!(
                     "You are the COBOLX Filesystem Retrieval Agent. Your ONLY job is to collect \
                     raw data about COBOL files using the tools below. Do NOT explain or interpret \
                     — just gather and output a structured data summary.\n\
@@ -95,7 +96,13 @@ impl AgentRouter {
                     9. identifiers(program_id, kind, value, occurrences)\n\
                     10. literals(program_id, kind, value, occurrences)\n\
                     11. copybook_features(copybook_file_id, copybook_name, used_by_program_count, contains_header_fields, contains_error_fields)"
-                ));
+                );
+                append_agent_skills(
+                    &mut system_prompt,
+                    sandbox_path,
+                    AgentKind::FilesystemRetrieval,
+                )?;
+                first_msg.content = Some(system_prompt);
             }
         }
 
